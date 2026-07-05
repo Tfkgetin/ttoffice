@@ -16,7 +16,7 @@ import pandas as pd
 from . import charts_xlsx
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from openpyxl.formatting.rule import DataBarRule, CellIsRule
+from openpyxl.formatting.rule import DataBarRule, CellIsRule, ColorScaleRule
 from openpyxl.utils import get_column_letter
 from openpyxl.chart import BarChart, Reference, Series
 from openpyxl.chart.label import DataLabelList
@@ -403,7 +403,29 @@ def _summary(ws, grid, params, source, per_layer):
                 "xol": f"I{r}", "net": f"J{r}", "equity": equity_ref}
             r += 1
         r += 1
+    _summary_heat(ws, rowmap)
     return rowmap
+
+
+def _summary_heat(ws, rowmap):
+    """Signal-first conditional formatting on the Summary grid:
+      · Gross (col D)     — in-cell data bars so loss magnitude reads at a glance
+      · Net/Gross (col K) — green→amber→red scale so retention/cede-down is visible
+    Ranges are taken from the captured rows, so no header/blank rows are touched."""
+    rows = sorted(int(ref["net"][1:]) for ref in rowmap.values())
+    if not rows:
+        return
+    lo, hi = rows[0], rows[-1]
+    ws.conditional_formatting.add(
+        f"D{lo}:D{hi}",
+        DataBarRule(start_type="num", start_value=0, end_type="max",
+                    color="8FB0CF", showValue=True))
+    # high retention (net/gross → 1) = red (more risk kept); low = green
+    ws.conditional_formatting.add(
+        f"K{lo}:K{hi}",
+        ColorScaleRule(start_type="num", start_value=0, start_color="2E7D32",
+                       mid_type="num", mid_value=0.5, mid_color="F2C14E",
+                       end_type="num", end_value=1, end_color="C0392B"))
 
 
 def _fibl_receiver_block(ws, r, grid, rowmap=None):
