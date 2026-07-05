@@ -8,6 +8,7 @@ venv/
 # Pipeline artifacts
 runs/
 out/
+output/
 outputs/
 *.xlsx
 !config/**/*.xlsx
