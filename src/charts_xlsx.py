@@ -26,19 +26,21 @@ from openpyxl.utils import get_column_letter
 # ---- palette ----------------------------------------------------------------
 NAVY = "1B3A5C"; NAVY_LT = "5B86B0"; SKY = "9CC0E0"
 GREEN = "2D6A3C"; AMBER = "9A6410"; RED = "C0392B"
-# Muted business-review palette matching the user's example style.
-PAL_FIHL = "47766A"       # muted green / teal
-PAL_FUL = "B59B00"        # mustard gold
-PAL_FIBL = "6B5A88"       # muted purple
-PAL_FIID = "C64B31"       # terracotta red
-PAL_GROSS = "D9DEE7"      # soft grey-blue
-PAL_NET = "1E3B5F"        # deep navy
-PAL_LINE = "9AA65B"       # olive line
-PAL_POS = "00A6D6"        # positive exposure movement
-PAL_NEG = "222222"        # negative exposure movement
-PAL_TOTAL = "F2A900"      # opening / closing orange
+# Entity categorical palette — colour-blind-safe, validated (validate_palette.js:
+# lightness/chroma/CVD-separation/contrast all PASS). Fixed hue order per entity,
+# never cycled; colour follows the entity, not its rank.
+PAL_FIHL = "1F6FB2"       # blue    — group / consolidated (primary)
+PAL_FUL = "C46A10"        # orange  — operating entity
+PAL_FIBL = "328E6E"       # green   — internal RI receiver
+PAL_FIID = "9B4FA0"       # purple  — operating entity
+PAL_GROSS = "D9DEE7"      # soft grey-blue — gross (light end of the gross→net pair)
+PAL_NET = "1E3B5F"        # deep navy      — net   (dark end of the pair)
+PAL_LINE = "5A6B7D"       # slate overlay line (cumulative %, retention) — neutral, not a categorical hue
+PAL_POS = "1F6FB2"        # positive exposure movement (blue)
+PAL_NEG = "1F2933"        # negative exposure movement (ink)
+PAL_TOTAL = "1B3A5C"      # opening / closing anchor bars (navy)
 PAL_LAYER = "6382A8"
-PAL_ABOVE = "C64B31"
+PAL_ABOVE = "C0392B"      # above-tower breach — reserved status red
 
 INK = "1F2933"; SOFT = "6B7785"; RULE = "DCE3EA"; CREAM = "EEF3F8"
 HDRTXT = "FFFFFF"; BLUE_INPUT = "0000CC"
@@ -154,7 +156,11 @@ def _style_axes(chart, y_title="$m", y_fmt=MONEY_M):
 
 def _colour(series, rgb, line=None):
     series.graphicalProperties = GraphicalProperties(solidFill=rgb)
-    series.graphicalProperties.line = LineProperties(solidFill=(line or rgb), w=9525)
+    # Bars (line=None) get a thin white edge so adjacent/stacked fills read as
+    # separate marks (2px surface-gap spec); line series keep their own colour.
+    edge = line if line is not None else "FFFFFF"
+    w = 9525 if line is not None else 12700
+    series.graphicalProperties.line = LineProperties(solidFill=edge, w=w)
 
 
 def _safe_num(v):
