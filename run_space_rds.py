@@ -2,7 +2,7 @@
 """Space RDS pipeline — orchestrator.
 
 Usage:
-    python run_pipeline.py --config config/2026Q1.yaml [--outdir output/2026Q1]
+    python run_space_rds.py --config config/2026Q1.yaml [--outdir output/2026Q1]
 """
 from __future__ import annotations
 import argparse
@@ -15,30 +15,43 @@ from src.parameters import Params
 from src import ingest, engine, scenarios, netting as net_mod, validate, outputs
 
 
-# Headline targets from the workbook (Summary + Netting Waterfall tabs).
-# Used in reconciliation mode to prove the pipeline reproduces the workbook.
+# Headline targets in --reconcile mode.
+# FIX(recon 2026Q1): these are the CORRECTED-AUTO 2026Q1 figures — the shipped
+# book adjusted for the one pipeline bug (D5: spurious S3123 eligibility on
+# SXM-10 / NUSANTARA LIMA, since fixed in engine/s3123). They were proven
+# equal to Manual + D1..D4 (EUTELSAT 36D timing, VIASAT off-risk correction,
+# MEASAT inception restatement, live exposure drift) to the dollar — see
+# Space_RDS_2026Q1_Auto_vs_Manual_Bridge.xlsx.
+# NOTE: valid only against the 2026Q1 data vintage (as-at 2026-04-01, live view
+# as of 2026-07-02, 11 data_corrections active). A later run against restated
+# live data may legitimately drift — that is data, not logic. FIHL grosses are
+# COMBINED (incl S3123 QS + IG equity — the manual Change Narrative / Exec
+# basis, headline across the book); the ex-add-on split is in the Summary memo
+# columns and on the "S3123 & Equity (IG)" tab. FIBL is not targeted (receiver
+# basis, one hand-keyed manual cell on Max Risk).
 WB_HEADLINES = [
-    # (entity, scenario, field, workbook value)
-    ("FIHL", "Proton Flare",   "gross", 47_706_969),
-    ("FIHL", "Space Weather",  "gross", 267_843_602),
-    ("FIHL", "Generic Defect", "gross", 133_349_351),
-    ("FIHL", "Space Debris",   "gross", 108_771_648),
-    ("FIHL", "Max Risk",       "gross", 39_999_960),
-    ("FUL",  "Proton Flare",   "gross", 29_792_884),
-    ("FUL",  "Proton Flare",   "net",   12_217_154),
-    ("FUL",  "Space Weather",  "gross", 122_607_729),
-    ("FUL",  "Space Weather",  "net",   49_043_092),
-    ("FUL",  "Generic Defect", "gross", 93_137_025),
-    ("FUL",  "Space Debris",   "gross", 75_341_155),
-    ("FIID", "Proton Flare",   "gross", 17_914_085),
-    ("FIID", "Proton Flare",   "net",   2_149_690),
-    ("FIID", "Space Weather",  "gross", 145_235_873),
-    ("FIID", "Space Weather",  "xol_ceded", 9_928_305),
-    ("FIID", "Space Weather",  "net",   7_500_000),
-    ("FIID", "Generic Defect", "gross", 40_212_326),
-    ("FIID", "Generic Defect", "net",   4_825_479),
-    ("FIID", "Space Debris",   "gross", 29_430_523),
-    ("FIID", "Max Risk",       "gross", 28_857_627),
+    # (entity, scenario, field, corrected 2026Q1 value)
+    ("FIHL", "Proton Flare",   "gross",  52_806_166),
+    ("FIHL", "Space Weather",  "gross", 300_953_877),
+    ("FIHL", "Generic Defect", "gross", 146_248_706),
+    ("FIHL", "Space Debris",   "gross", 121_353_137),
+    ("FIHL", "Max Risk",       "gross",  39_999_960),
+    ("FUL",  "Proton Flare",   "gross",  29_792_854),
+    ("FUL",  "Proton Flare",   "net",    12_217_141),
+    ("FUL",  "Space Weather",  "gross", 122_607_603),
+    ("FUL",  "Space Weather",  "net",    49_043_041),
+    ("FUL",  "Generic Defect", "gross",  91_281_234),   # carries the VIASAT correction
+    ("FUL",  "Space Debris",   "gross",  75_341_125),
+    ("FUL",  "Max Risk",       "gross",  39_999_960),
+    ("FIID", "Proton Flare",   "gross",  18_188_860),   # carries EUTELSAT 36D
+    ("FIID", "Proton Flare",   "net",     2_182_663),
+    ("FIID", "Space Weather",  "gross", 150_731_383),
+    ("FIID", "Space Weather",  "xol_ceded", 10_587_766),
+    ("FIID", "Space Weather",  "net",     7_500_000),
+    ("FIID", "Generic Defect", "gross",  41_311_428),
+    ("FIID", "Generic Defect", "net",     4_957_371),
+    ("FIID", "Space Debris",   "gross",  29_705_298),
+    ("FIID", "Max Risk",       "gross",  28_857_627),
 ]
 
 
@@ -50,6 +63,8 @@ def main():
                     help="override the config's as_at_date (YYYY-MM-DD)")
     ap.add_argument("--reconcile", action="store_true",
                     help="validate computed columns + headlines against the workbook")
+    ap.add_argument("--no-prior", action="store_true",
+                    help="skip prior-quarter seeding even if the config sets prior_workbook")
     args = ap.parse_args()
 
     p = Params.load(args.config)
@@ -60,11 +75,11 @@ def main():
 
     print(f"Space RDS pipeline · {p.quarter} · as-at {p.as_at}")
 
-    print("[1/6] Ingest…")
+    print("[1/7] Ingest…")
     df = ingest.load(p)
     print(f"      {len(df)} rows · {df['layer_key'].nunique()} layers")
 
-    print("[2/6] Engine…")
+    print("[2/7] Engine…")
     df = engine.run_engine(df, p)
 
     sql_cols = [c for c in df.columns if c.startswith("sql_")]
@@ -78,14 +93,48 @@ def main():
         if nb:
             print(sq[sq["status"] != "OK"].to_string(index=False))
 
-    print("[3/6] Scenarios…")
+    print("[3/7] Scenarios…")
     per_layer, sw, mr = scenarios.run_scenarios(df, p)
 
-    print("[4/6] Netting + summary grid…")
+    print("[4/7] Netting + summary grid…")
     nets = net_mod.entity_scenario_netting(per_layer, p)
     grid = net_mod.summary_grid(per_layer, p)
 
-    print("[5/6] Reconciliation…")
+    # ------------------------------------------------------------------ #
+    # [5/7] Prior quarter — seed QoQ from the FROZEN manual workbook.
+    # FIX(recon 2026Q1): the Changes / Exposure Bridge / Loss Movement
+    # sheets shipped as "baseline" because no prior pipeline run exists.
+    # Re-running the LIVE view with --as-at <prior close> is NOT a valid
+    # prior (restatements pollute it — VIASAT, MEASAT, 36D would vanish
+    # from movement). The frozen quarter-close workbook is the correct
+    # filed prior; prior_seed reproduces it exactly (validated 2025Q4,
+    # 10/10 rows). Once THIS run is persisted, switch to run-vs-run and
+    # remove prior_workbook from config.
+    # ------------------------------------------------------------------ #
+    changes = None
+    prior_path = (p.raw or {}).get("prior_workbook")
+    if prior_path and not args.no_prior:
+        print("[5/7] Prior quarter (frozen workbook)…")
+        try:
+            from src import prior_seed
+            prior_layers = prior_seed.load_prior_workbook(prior_path)
+            prior_grid = net_mod.summary_grid(prior_layers, p)
+            label = (p.raw or {}).get("prior_as_at_label") or "prior close"
+            changes = prior_seed.build_changes(per_layer, grid,
+                                               prior_layers, prior_grid,
+                                               prior_as_at=label)
+            s = changes["layers"]["summary"]
+            print(f"      prior: {len(prior_layers)} layers from workbook · "
+                  f"{s['new_layers']} new / {s['dropped_layers']} dropped / "
+                  f"{s['moved_layers']} moved this quarter")
+        except Exception as e:
+            print(f"      WARNING: prior seeding failed ({e}) — "
+                  f"book will render as baseline")
+            changes = None
+    else:
+        print("[5/7] Prior quarter… skipped (no prior_workbook in config)")
+
+    print("[6/7] Reconciliation…")
     import pandas as pd
     if args.reconcile:
         sub = per_layer[per_layer["orbit"] != "LEO"]
@@ -116,8 +165,22 @@ def main():
     else:
         recon = pd.DataFrame([{"column": "reconcile", "status": "SKIPPED"}])
 
-    print("[6/6] Export…")
-    out = outputs.export(outdir, per_layer, sw, mr, nets, grid, recon, p)
+    print("[7/7] Export…")
+    # `changes` is forwarded to outputs.export as a keyword so the report can
+    # build the Changes tab + movement waterfalls. If outputs.export has not
+    # yet been updated to accept it, fall back to the old signature and say so
+    # (one-line fix in outputs.py: add `changes=None` to export() and pass it
+    # through to excel_report.write_results(..., changes=changes, ...)).
+    try:
+        out = outputs.export(outdir, per_layer, sw, mr, nets, grid, recon, p,
+                             changes=changes)
+    except TypeError:
+        if changes is not None:
+            print("      NOTE: outputs.export() does not accept changes= yet — "
+                  "prior-quarter sheets will render as baseline. Add "
+                  "`changes=None` to outputs.export's signature and forward it "
+                  "to excel_report.write_results.")
+        out = outputs.export(outdir, per_layer, sw, mr, nets, grid, recon, p)
     print(f"Done → {out}")
 
 

@@ -1,0 +1,288 @@
+# Space RDS pipeline — 2026Q1 parameters
+# Single source of truth for the quarter. Next quarter: copy this file, update values.
+# Every value traceable to the workbook tab noted in the comment.
+
+quarter: "2026Q2"
+as_at_date: "2026-07-01"
+
+# ---- Prior quarter (QoQ seeding) -------------------------------------------
+# FIX(recon 2026Q1): seed the Changes / Exposure Bridge / Loss Movement sheets
+# from the FROZEN quarter-close manual workbook — the correct filed prior.
+# Do NOT create a prior by re-running the live view with --as-at <prior close>:
+# the view rewinds the date filter only, so restatements (VIASAT, MEASAT, 36D)
+# would pollute the prior and genuine movement would net to zero.
+# Retire these two keys once a persisted pipeline run exists to compare against
+# (i.e. from 2026Q2 onward, after this quarter's run is saved).
+prior_workbook: "output/2026-04-01/Space_RDS_results_2026-04-01.xlsx"   # the FILED Q1 auto book (update path to the final Q1 run)
+prior_as_at_label: "2026-04-01 (2026Q1 auto book)"
+
+# ---- Time decay (Risk Period Factor) -------- Input Data O10:P14
+# Banded on full months between as-at date and Off_Risk_Date (largest band <= months)
+rpf_bands:
+  - { months: 0,   factor: 0.20 }
+  - { months: 6,   factor: 0.40 }
+  - { months: 12,  factor: 0.60 }
+  - { months: 18,  factor: 0.80 }
+  - { months: 999, factor: 1.00 }
+
+# ---- LEO debris months-left bands ------------ Summary R4:S7 (lookup is MATCH+1 shifted)
+leo_debris_rpf_bands:                # applied to AC (months left, LEO only)
+  - { months: 0,  factor: 0.20 }
+  - { months: 6,  factor: 0.40 }
+  - { months: 12, factor: 0.60 }
+  - { months: 18, factor: 0.80 }
+
+# ---- Scenario parameters --------------------- Summary P3/P6/P9, U4:Y6
+scenarios:
+  proton_flare:
+    insured_loss: 0.05               # Summary P9
+    orbits: ["GEO-GSO"]
+    apply_rpf: false
+  generic_defect:
+    insured_loss: 0.50               # Summary P3
+    orbits: ["GEO-GSO", "MEO"]
+    apply_rpf: true
+  space_debris:
+    insured_loss: 1.00               # Summary P6
+    orbits: ["GEO-GSO", "MEO", "LEO"]   # Summary D8 includes all three orbits
+    per_layer_block_orbits: ["GEO-GSO", "MEO"]  # Input Data CY block excludes LEO
+    damage_by_orbit:                 # Summary U4:Y6 adjusted factors
+      # IG book uses FLAT LEO 0.40 — confirmed on 2025Q4 where long-dated LEO
+      # existed and the filed Summary still used 0.40 (banded would give 67.9m
+      # vs the filed 61.2m). The banded leo_debris_rpf feeds the Lloyd's side.
+      LEO: 0.40
+      MEO: 0.10
+      GEO-GSO: 0.05
+
+# ---- IG Equity Share ------------------------- IG Equity Share tab (by inception year)
+equity_share_by_year:
+  2024: 0.099
+  2025: 0.075
+  2026: 0.075
+
+# ---- S3123 consortium share factors ---------- S3123 Consortium Share tab
+# XLOOKUP exact-or-next-smaller on layer inception date
+s3123_consortium_factors:
+  - { from: "2022-11-01", factor: 0.4166666666666667 }   # 12.5 / 30
+  - { from: "2026-01-01", factor: 0.50 }                  # 15 / 30
+  - { from: "2026-04-01", factor: 0.3333333333333333 }   # 10 / 30
+
+# ---- S3123 inwards QS ------------------------ S3123 QS tab
+# FIX(recon 2026Q1, D5): window opens at the CONSORTIUM START, not 2022-11-01.
+# The old 2022-11-01 window + live is_consortium restating TRUE for spacecraft
+# 17163 (SXM-10) / 17950 (NUSANTARA LIMA) — both 2022, pre-consortium — put
+# spurious S3123 QS into FIHL (+312.5k PF/SD, +916.7k GD, +3.33m Max Risk).
+# Earliest legitimate S3123 layer incepts 2024-12-15, so this is loss-free.
+# consortium_start is also enforced as a hard floor in engine.py / s3123.py,
+# so a wrong flag can never leak pre-consortium business again.
+# NOTE: excluded_spacecraft means "consortium but retains 100% — no QS ceded
+# back to IG" (they still carry equity + an S3123 share). Do NOT use it to fix
+# wrong is_consortium flags.
+s3123_qs:
+  cession: 0.20
+  date_from: "2024-07-01"            # was 2022-11-01 (pre-consortium)
+  date_to: "2026-12-31"
+  consortium_start: "2024-07-01"
+  excluded_spacecraft: [14294, 13257, 10590]
+
+# ---- IGR Quota Share ------------------------- IGR QS tab (entity+mapping_code+year)
+# Defaults per entity, with (entity, mapping_code, year) overrides from the tab
+igr_qs:
+  default:
+    FUL: 0.50
+    FIID: 0.85
+    FIBL: 0.00
+    FIHL: 0.00
+  overrides:                       # IGR QS tab rows where cession differs from default
+    - { entity: FUL, code: ASC, year: 2021, cession: 0.40 }
+    - { entity: FUL, code: ASC, year: 2022, cession: 0.40 }
+    - { entity: FUL, code: ASL, year: 2021, cession: 0.40 }
+    - { entity: FUL, code: ASL, year: 2022, cession: 0.40 }
+    - { entity: FUL, code: ASO, year: 2022, cession: 0.40 }   # note: ASO 2021 stays 0.50
+    - { entity: FUL, code: ASR, year: 2021, cession: 0.40 }
+    - { entity: FUL, code: ASR, year: 2022, cession: 0.40 }
+
+# ---- IGR XoL --------------------------------- IGR XoL tab B17:F19
+igr_xol:
+  FUL:  { limit: 245000000, deductible: 50000000 }
+  FIID: { limit: 72500000,  deductible: 7500000 }
+
+# ---- Outwards (external) RI slots ------------ Input Data AO6:AX11
+# Allocated where layer inception falls inside [inception, expiry]
+outwards_ri_slots:
+  - { id: 59904,  name: "OCIL 2019",              from: "2019-10-01", to: "2020-05-31", pct: 0.1176 }
+  - { id: 75074,  name: "Slot 2020a",             from: "2020-06-01", to: "2020-09-30", pct: 0.038 }
+  - { id: 145877, name: "NICO 2020",              from: "2020-10-01", to: "2021-12-31", pct: 0.20 }
+  - { id: 236123, name: "NICO 2022",              from: "2022-01-01", to: "2022-12-31", pct: 0.20 }
+  - { id: 342090, name: "Travelers 2023",         from: "2023-01-01", to: "2023-12-31", pct: 0.20 }
+  - { id: 383251, name: "Travelers 2024",         from: "2024-01-01", to: "2024-12-31", pct: 0.20 }
+  - { id: 439174, name: "Travelers 2025",         from: "2025-01-01", to: "2025-12-31", pct: 0.20 }
+  - { id: null,   name: "Travelers 2026",         from: "2026-01-01", to: "2026-12-31", pct: 0.20 }
+# data_corrections for 2026Q1 (as-at 2026-04-01)
+# date_logged = when the correction was first established (audit provenance)
+# ALL Q4 corrections carried forward (still applicable — verified against Q1 data)
+# PLUS 3 new SPAINSAT off-risk + 1 orbit reclassification this quarter. 11 total.
+data_corrections:
+  # ===== Carried forward from 2025Q4 — still applicable =====
+  # --- MEASAT value restatements (4) ---
+  - program_id: 360737
+    layer_id: 492382
+    field: per_sc
+    value: 494845.36
+    date_logged: "2025-12-31"
+    established: "2025Q4"
+    reason: "MEASAT 3A per-S/C restatement (manual GD reconciliation)"
+  - program_id: 360737
+    layer_id: 492383
+    field: per_sc
+    value: 2628865.97
+    date_logged: "2025-12-31"
+    established: "2025Q4"
+    reason: "MEASAT 3B per-S/C restatement (manual GD reconciliation)"
+  - program_id: 360737
+    layer_id: 516619
+    field: per_sc
+    value: 494845.36
+    date_logged: "2025-12-31"
+    established: "2025Q4"
+    reason: "MEASAT 3A per-S/C restatement (manual GD reconciliation)"
+  - program_id: 360737
+    layer_id: 516620
+    field: per_sc
+    value: 2628865.97
+    date_logged: "2025-12-31"
+    established: "2025Q4"
+    reason: "MEASAT 3B per-S/C restatement (manual GD reconciliation)"
+  # --- VIASAT + Nusantara off-risk corrections (3) ---
+  - program_id: 357074
+    layer_id: 486815
+    field: off_risk_date
+    value: "2026-11-14"
+    date_logged: "2025-12-31"
+    established: "2025Q4"
+    reason: "VIASAT-3 F2 off-risk corrected to manual (RPF 0.6->0.4)"
+  - program_id: 271177
+    layer_id: 329405
+    field: off_risk_date
+    value: "2027-03-12"
+    date_logged: "2025-12-31"
+    established: "2025Q4"
+    reason: "Nusantara Lima off-risk corrected to manual (RPF 0.8->0.6)"
+  - program_id: 276734
+    layer_id: 338150
+    field: off_risk_date
+    value: "2027-03-12"
+    date_logged: "2025-12-31"
+    established: "2025Q4"
+    reason: "Nusantara Lima off-risk corrected to manual (RPF 0.8->0.6)"
+
+  # ===== New this quarter (2026Q1): SPAINSAT NG off-risk (3) =====
+  - program_id: 328274
+    layer_id: 433090
+    field: off_risk_date
+    value: "2026-05-30"
+    date_logged: "2026-04-01"
+    established: "2026Q1"
+    reason: "SPAINSAT NG-1 off-risk corrected to manual (RPF 0.4->0.2)"
+  - program_id: 328274
+    layer_id: 436566
+    field: off_risk_date
+    value: "2027-02-24"
+    date_logged: "2026-04-01"
+    established: "2026Q1"
+    reason: "SPAINSAT NG-2 off-risk corrected to manual (RPF 0.8->0.4)"
+  - program_id: 334082
+    layer_id: 445095
+    field: off_risk_date
+    value: "2026-05-30"
+    date_logged: "2026-04-01"
+    established: "2026Q1"
+    reason: "SPAINSAT NG-1 off-risk corrected to manual (RPF 0.4->0.2)"
+
+  # ===== New this quarter (2026Q1): orbit reclassification =====
+  - program_id: 350998
+    layer_id: 477970
+    field: orbit
+    value: "GEO-GSO"
+    date_logged: "2026-04-01"
+    established: "2026Q1"
+    reason: "ASBM 1 (Norway) Elliptical orbit reclassified to GEO-GSO per methodology agreement; was filtered out of GEO scenarios"
+ 
+# reconciliation_notes for 2026Q1 (as-at 2026-04-01)
+# Documentary only — these explain intentional auto-vs-manual differences.
+# They change NO data; they render on the Python Adjustments tab so anyone
+# opening the book can see where (and why) auto diverges from the manual.
+reconciliation_notes: []   # Q1 notes retired: 36D now in system; D5 fixed in code
+
+# ---- Entities --------------------------------
+entities: ["FIHL", "FUL", "FIID", "FIBL"]
+
+# ---- Ingest ----------------------------------
+ingest:
+  source: sql
+  sql:
+    server: LON-SQLP-V005
+    database: SpaceTrax_Data
+    query_file: sql/space_rds_onrisk_asat.sql
+
+# ---- Pipeline-side population exclusions ----
+# Drop layers whose Placing_Basis matches (case-insensitive). The SQL view only
+# filters 'Consortium Declaration'; this removes plain 'Consortium' too without
+# altering shared SQL. Excluded layers are listed on the Excluded sheet.
+exclude_placing_basis:
+  - "Consortium"
+
+# ============================================================================
+# S3123 (Syndicate 3123 / Lloyd's) RDS
+# ----------------------------------------------------------------------------
+# Produces Syndicate 3123's OWN return, reported on a separate "S3123 RDS" tab,
+# alongside the IG book. Automated via spacepkg/s3123.py + s3123_sheet.py.
+# Same RPF bands + per-risk loss formula as IG; differs only in:
+#   * share      : S3123 sub-share = per_sc * s3123_factor (12.5/30, 15/30,
+#                  10/30), GATED by consortium eligibility (FIX recon 2026Q1:
+#                  the gate was missing — non-consortium 2022 lines leaked in
+#                  and SXM-10 wrongly became the syndicate Max Risk)
+#   * selection  : Lloyd's caps (see scenarios below)
+#   * SD damage  : share * RPF (time-decay) — NOT the IG flat 0.40 LEO ratio.
+#                  OPEN (O1): JJ's 2026Q1 workings use an altitude-grouped
+#                  basis; method + per-line share source (schedule-derived vs
+#                  actual signed lines from the Lloyd's view) to be agreed
+#                  with JJ before next filing.
+#   * netting    : net = gross * 0.80 = 20% QS ceded back to IG (same cession
+#                  that lands in the IG number as s3123_qs; excluded s/c retain 100%)
+# ============================================================================
+s3123_rds:
+  enabled: true
+  share: consortium_factor                       # per_sc * s3123_factor, consortium-gated
+  consortium_start: "2024-07-01"                 # hard floor on share eligibility (D5 fix)
+  qs_to_ig: 0.20                                 # 20% QS back to IG -> net = gross * 0.80
+  qs_to_ig_excluded: [14294, 13257, 10590]       # above IG max line -> retain 100%
+  # FIX(recon 2026Q1, O2): the old code ignored `active` and applied attach=0,
+  # which recovered the ENTIRE net — that is why the shipped book printed $0
+  # for every S3123 net. Code now honors active:false and requires BOTH
+  # attach > 0 and limit > 0 before applying. When the Agg XoL attaches,
+  # enter its true attachment here and set active: true.
+  agg_xol: { limit: 30000000, attach: null, active: false }  # consortium Agg XoL, 30m max/event; not attaching 2026Q1
+  max_risk: true
+
+  scenarios:
+    proton_flare:   { type: full,         orbits: ["GEO-GSO"],                          loss: 0.05 }
+    space_weather:  { type: bus_type_top, top_n: 4,                                     loss: 1.00 }
+    generic_defect: { type: top_n_risks,  top_n: 10, orbits: ["GEO-GSO", "MEO"],        loss: 0.50, apply_rpf: true }
+    space_debris:   { type: orbit_group,  orbits: ["LEO"],                              apply_rpf: true }   # share * RPF — method open (O1)
+
+  # Lloyd's population + bus type come from the Lloyd's views (same database).
+  # NOTE (O1): the 2026Q1 run computed shares from the consortium-factor
+  # schedule on the IG population. Aggregates tie JJ (PF to £3 post-fix) but
+  # per-line shares differ from his actual signed lines, which moves the GD
+  # top-10 (~1.0m) and SD. Preferred fix: ingest per-line shares from
+  # vw_SpaceRDS_All_Lloyds_RDS. Also required for Space Weather: without the
+  # bus-type join the SW cell renders "n/a" (it printed $0 in the shipped
+  # book; the sheet now flags it instead).
+  lloyds_source:
+    bus_type_view:   "rds.vw_SpaceRDS_All_Lloyds_RDS"        # layer -> Lloyds Bus Type
+    population_view: "rds.vw_SpaceRDS_SpaceWeather_Lloyds"   # S3123 on-risk population
+    fallback_mapping_csv: null                              # optional CSV: layer_key,lloyds_bus_type
+
+  # manual_compare: RETIRED from 2026Q2 - there is no manual book to tie to.
+  # The S3123 RDS tab renders without the reconciliation block.
