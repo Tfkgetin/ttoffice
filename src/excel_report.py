@@ -312,6 +312,10 @@ def _control(wb, per_layer, params, source, recon, colmap):
 
 
 def _summary(ws, grid, params, source, per_layer):
+    # rowmap: (entity, scenario) -> dict of Summary A1 cell refs, so downstream
+    # sheets (e.g. the RDS Input Template) can point at these cells as live
+    # formulas instead of re-emitting hard-coded values. Populated below.
+    rowmap = {}
     _title(ws, f"Space RDS · {params.quarter}",
            f"as-at {params.as_at} · source: {source} · "
            f"{len(per_layer)} rows · netting cascade = live formulas")
@@ -330,7 +334,7 @@ def _summary(ws, grid, params, source, per_layer):
     for entity in ["FIHL", "FUL", "FIID", "FIBL"]:
         # FIBL renders on the receiver (combined) basis — its own block.
         if entity == "FIBL" and "gross_receiver" in grid.columns:
-            r = _fibl_receiver_block(ws, r, grid)
+            r = _fibl_receiver_block(ws, r, grid, rowmap)
             continue
         ws.cell(row=r, column=2, value=entity).font = F_SECT
         _desc = {"FIHL": "group / consolidated — COMBINED (incl S3123 QS + IG "
@@ -386,15 +390,23 @@ def _summary(ws, grid, params, source, per_layer):
             else:
                 _cell(ws, r, 11, None, alt=alt)
             # FIX(recon 2026Q1, C1): FIHL ex-add-on memo (manual convention)
+            equity_ref = None
             if _memo_here:
                 for j, (k, _lbl) in enumerate(
                         [m for m in FIHL_MEMO if m[0] in grid.columns]):
                     _cell(ws, r, 12 + j, val(k), alt=alt, money=True)
+                    if k == "equity_usd":
+                        equity_ref = f"{get_column_letter(12 + j)}{r}"
+            # capture this row's cell refs for downstream live-formula sheets
+            rowmap[(entity, val("scenario"))] = {
+                "gross": f"D{r}", "ext_qs": f"E{r}", "igr_qs": f"G{r}",
+                "xol": f"I{r}", "net": f"J{r}", "equity": equity_ref}
             r += 1
         r += 1
+    return rowmap
 
 
-def _fibl_receiver_block(ws, r, grid):
+def _fibl_receiver_block(ws, r, grid, rowmap=None):
     """FIBL on the internal-receiver basis (manual Change Narrative convention),
     using the SAME column layout as the other entities (Gross in column D, Net
     in column J) so the figures are visually aligned. The five receiver
@@ -450,6 +462,10 @@ def _fibl_receiver_block(ws, r, grid):
         eq = float(val("equity_usd") or 0)
         for j, v in enumerate([qs, xol, direct, s3, eq]):
             _cell(ws, r, 12 + j, v or None, alt=alt, money=True)
+        if rowmap is not None:
+            rowmap[("FIBL", val("scenario"))] = {
+                "gross": f"D{r}", "ext_qs": f"E{r}", "igr_qs": None,
+                "xol": None, "net": f"J{r}", "equity": f"{get_column_letter(16)}{r}"}
         r += 1
     ws.cell(row=r, column=2,
             value="Gross = receiver total (QS in + XoL in + direct + S3123 + "
@@ -461,7 +477,7 @@ def _fibl_receiver_block(ws, r, grid):
     return r + 2
 
 
-def _rds_input_template(wb, grid, s3grid, params):
+def _rds_input_template(wb, grid, s3grid, params, summary_map=None):
     """Regulator RDS Input Template block — one section per scenario, in the
     EXACT row order and entity-column order of JJ's RDS_Input_Template .xlsm
     'Scenario' tab, so the user can copy a scenario block and paste it straight
@@ -487,9 +503,10 @@ def _rds_input_template(wb, grid, s3grid, params):
     ws = wb.create_sheet("RDS Input Template")
     _title(ws, "RDS Input Template — paste-ready",
            "One block per scenario, identical row/column order to the regulator "
-           "template's 'Scenario' tab. Copy a block's value grid (the FIHL..S3123 "
-           "columns) and paste into the yellow cells. Live-data figures; verified "
-           "to JJ's 2026Q1 filed template to the dollar.")
+           "template's 'Scenario' tab. IG-entity figures are LIVE formulas linked "
+           "to the Summary tab (not hard-coded); when filing, paste-special → "
+           "Values into the regulator's yellow cells. Verified to JJ's 2026Q1 "
+           "filed template to the dollar.")
 
     ENTS = ["FIHL", "FUL", "FIBL", "FIID", "S3123", "S2126"]
     # (label, id) in the template's exact order
@@ -566,6 +583,32 @@ def _rds_input_template(wb, grid, s3grid, params):
         # everything else (RIPS, facultative, specialty add-ons) = 0
         return 0.0, False, False
 
+    def cell_formula(label, scen, ent):
+        """Live 'Summary'! reference reproducing cell_value for the IG entities,
+        so the template is not hard-coded. Returns None to fall back to the value
+        (S3123/S2126 columns, the 0 rows, and grey cells stay as-is)."""
+        if not summary_map:
+            return None
+        m = summary_map.get((ent, scen))
+        if not m:
+            return None
+        S = "'Summary'!"
+        if label == "Gross Loss":
+            return f"={S}{m['gross']}"
+        if label in ("Net Loss", "Net Loss inc RIPS"):
+            return f"={S}{m['net']}"
+        if label == "Outwards QS Recovery":
+            return f"={S}{m['ext_qs']}"
+        if label == "IGR QS Recovery" and ent in ("FUL", "FIID") and m["igr_qs"]:
+            return f"={S}{m['igr_qs']}"
+        if label == "IGR XOL Recovery" and ent in ("FUL", "FIID") and m["xol"]:
+            return f"={S}{m['xol']}"
+        if (label in ("IG Equity Share of S3123 (% of Net Loss xRIPS)",
+                      "IG Equity Share of S3123 (% of Net RIPS)")
+                and ent in ("FIHL", "FIBL") and m["equity"]):
+            return f"=IFERROR({S}{m['equity']}/{S}{m['net']},0)"
+        return None
+
     r = 5
     for scen in SCEN_ORDER:
         ws.cell(row=r, column=2, value=scen).font = F_SECT
@@ -588,12 +631,19 @@ def _rds_input_template(wb, grid, s3grid, params):
             _cell(ws, r, 3, rid, alt=alt)
             for j, e in enumerate(ENTS):
                 v, is_pct, is_blank = cell_value(label, rid, scen, e)
+                f = cell_formula(label, scen, e)   # live 'Summary'! ref or None
                 if is_blank:
                     c = _cell(ws, r, 4 + j, None, alt=alt)
                     c.fill = PatternFill("solid", start_color="E8E8E8")
                 elif is_pct:
-                    c = _cell(ws, r, 4 + j, v, alt=alt)
+                    c = _cell(ws, r, 4 + j, f if f is not None else v, alt=alt)
                     c.number_format = '0.00000000'
+                    c.alignment = Alignment(horizontal="right")
+                elif f is not None:
+                    # live formula: set money format explicitly (a formula string
+                    # isn't numeric, so _cell won't apply it automatically)
+                    c = _cell(ws, r, 4 + j, f, alt=alt, bold=bold)
+                    c.number_format = MONEY
                     c.alignment = Alignment(horizontal="right")
                 else:
                     _cell(ws, r, 4 + j, v, alt=alt, money=True, bold=bold)
@@ -2536,7 +2586,7 @@ def write_results(path, per_layer, sw, mr, grid, params, source,
     _exec_summary(wb, grid, per_layer, params, source, recon, excluded, changes)
     _control(wb, per_layer, params, source, recon, colmap)
     ws_sum = wb.create_sheet("Summary")
-    _summary(ws_sum, grid, params, source, per_layer)
+    summary_map = _summary(ws_sum, grid, params, source, per_layer)
     _portfolio(wb, per_layer, params, colmap, changes)
     _parameters(wb, params)
     _waterfalls(wb, grid)
@@ -2566,7 +2616,7 @@ def write_results(path, per_layer, sw, mr, grid, params, source,
               f"updated. Deliverable tabs are unaffected.")
     _per_layer(wb, per_layer)
     _s3123_ig_addons(wb, grid, params)   # C1: manual-convention split
-    _rds_input_template(wb, grid, s3123_grid, params)   # paste-ready regulator block
+    _rds_input_template(wb, grid, s3123_grid, params, summary_map)   # paste-ready regulator block
     if s3123_grid is not None and len(s3123_grid):
         from .s3123_sheet import write_s3123_sheet
         write_s3123_sheet(wb, s3123_grid, recon=s3123_recon,
