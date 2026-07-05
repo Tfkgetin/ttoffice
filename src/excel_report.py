@@ -53,6 +53,12 @@ DELTA_NUMFMT = '"▲ +"0.0%;"▼ "0.0%;"▲ +"0.0%'
 
 SCEN_ORDER = ["Proton Flare", "Space Weather", "Generic Defect",
               "Space Debris", "Max Risk"]
+# Netting-waterfall rows: (label, grid column, sign). Consumed by _waterfalls().
+WF_ROWS = [("Gross Loss", "gross", 1), ("less: External QS", "ext_qs", -1),
+           ("less: Other Ext RI", "other_ext_ri", -1),
+           ("less: QS Ceded to FIBL", "igr_qs_ceded", -1),
+           ("less: XoL Ceded to FIBL", "xol_ceded", -1),
+           ("Net of XoL IGR (Retained)", "net", 1)]
 
 
 def _display_gross(row):

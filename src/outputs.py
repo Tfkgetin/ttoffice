@@ -10,7 +10,11 @@ from . import excel_report, persist, changes as changes_mod, engine as engine_mo
 
 def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
            mr: pd.DataFrame, netting: pd.DataFrame, summary: pd.DataFrame,
-           recon: pd.DataFrame, params) -> Path:
+           recon: pd.DataFrame, params, changes=None) -> Path:
+    # `changes` is an optional caller-supplied Q-on-Q dict (run_space_rds builds
+    # one from the frozen prior workbook). export computes its own `chg` below,
+    # which is the source of truth; the caller's is used only as a fallback when
+    # export can't build one (e.g. no prior run and no prior_workbook configured).
     out = Path(outdir)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -72,6 +76,9 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
         except Exception as e:  # noqa: BLE001
             print(f"      WARNING: frozen-workbook prior failed ({e}); "
                   f"using persisted-run prior")
+
+    if chg is None and changes is not None:
+        chg = changes  # caller-supplied (e.g. frozen-workbook) Q-on-Q fallback
 
     excluded = getattr(engine_mod.run_engine, "last_excluded", None)
     corrections = getattr(ingest_mod.load, "last_corrections", None)
