@@ -1789,6 +1789,19 @@ def _book_movement(wb, changes):
                                          sp["ren_old"], sp["lapsed"])
     ren_sid = sp["ren_sid"]
 
+    # An expired layer that carries a renewal pointer is NOT a plain lapse — split
+    # the lapsed set by the pointer's verdict:
+    #   pending — renewal in progress / bound-but-missing → renewing, not yet in
+    #             the book (can't pair in Renewals, but shown separately)
+    #   gone    — NTU/Declined or no pointer → genuinely off the book
+    _PENDING = ("in_progress", "bound_missing")
+    if lapsed is not None and len(lapsed) and "renewal_state" in lapsed.columns:
+        pending = lapsed[lapsed["renewal_state"].isin(_PENDING)].copy()
+        gone = lapsed[~lapsed["renewal_state"].isin(_PENDING)].copy()
+    else:
+        pending = lapsed.iloc[0:0].copy() if lapsed is not None else pd.DataFrame()
+        gone = lapsed
+
     def _num(v):
         try:
             return float(v)
@@ -1797,20 +1810,26 @@ def _book_movement(wb, changes):
 
     def _sum(df):
         return float(pd.to_numeric(df.get("per_sc"), errors="coerce").fillna(0).sum()) if len(df) else 0.0
-    nb_x, lap_x = _sum(new_biz), _sum(lapsed)
+    nb_x = _sum(new_biz)
+    pend_x, gone_x = _sum(pending), _sum(gone)
     ren_cur, ren_pri = _sum(ren_new), _sum(ren_old)
 
     ws = wb.create_sheet("Book Movement")
     _title(ws, "Book movement — new · renewals · lapsed",
            f"per-layer turnover vs {changes.get('prior_as_at', 'prior')}")
 
+    def _nsc(df):
+        return df["spacecraft_id"].nunique() if df is not None and len(df) else 0
+
     r = _section(ws, 5, "At a glance")
     r = _kv(ws, r, "New business", nb_x, money=True)
-    ws.cell(row=r - 1, column=4, value=f"{new_biz['spacecraft_id'].nunique() if len(new_biz) else 0} spacecraft").font = F_SUB
+    ws.cell(row=r - 1, column=4, value=f"{_nsc(new_biz)} spacecraft").font = F_SUB
     r = _kv(ws, r, "Renewals — current exposure", ren_cur, money=True)
     ws.cell(row=r - 1, column=4, value=f"{len(ren_sid)} spacecraft · was {ren_pri:,.0f} (Δ {ren_cur - ren_pri:+,.0f})").font = F_SUB
-    r = _kv(ws, r, "Lapsed (off the book)", lap_x, money=True)
-    ws.cell(row=r - 1, column=4, value=f"{lapsed['spacecraft_id'].nunique() if len(lapsed) else 0} spacecraft").font = F_SUB
+    r = _kv(ws, r, "Renewals in progress (not yet in book)", pend_x, money=True)
+    ws.cell(row=r - 1, column=4, value=f"{_nsc(pending)} spacecraft · renewal pending — see table below").font = F_SUB
+    r = _kv(ws, r, "Lapsed (not renewed / off the book)", gone_x, money=True)
+    ws.cell(row=r - 1, column=4, value=f"{_nsc(gone)} spacecraft").font = F_SUB
     r += 1
 
     # Column order: Program · Layer · Entity · Spacecraft · Orbit · Inception ·
@@ -1911,19 +1930,37 @@ def _book_movement(wb, changes):
         _cell(ws, r, 2, "— none —"); r += 1
     r += 1
 
-    r = _simple_table(r, f"Lapsed — {lapsed['spacecraft_id'].nunique() if len(lapsed) else 0} "
-                         f"spacecraft off the book (${lap_x:,.0f})", lapsed, "C0392B",
+    # Renewals in progress — expired, renewal recorded but not yet bound/in the
+    # book. Pulled OUT of "lapsed": these are renewing (the "Program" column is
+    # the EXPIRING programme id, "Renewed to" the successor). Manual-inclusion /
+    # roll-forward candidates. Amber exposure (pending, not a loss).
+    if len(pending):
+        r = _simple_table(r, f"Renewals in progress — {_nsc(pending)} spacecraft, "
+                             f"renewal not yet in book (${pend_x:,.0f})", pending,
+                          AMBER, "BM_Pending", show_renewal=True)
+        pn = ws.cell(row=r, column=2, value=(
+            "Expired, but the underwriter's pointer shows a renewal quoted / in "
+            "progress (not yet bound, so absent from source). 'Program' is the "
+            "expiring id, 'Renewed to' the successor — these are renewing, not "
+            "lost. Candidates for roll-forward / manual inclusion if UW confirms."))
+        pn.font = Font(name=_FB, size=9, italic=True, color=SOFT)
+        pn.alignment = Alignment(wrap_text=True, vertical="top")
+        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=11)
+        ws.row_dimensions[r].height = 28
+        r += 2
+
+    r = _simple_table(r, f"Lapsed — {_nsc(gone)} spacecraft off the book, "
+                         f"not renewed (${gone_x:,.0f})", gone, "C0392B",
                       "BM_Lapsed", show_renewal=True)
-    have_renewal = lapsed is not None and "renewal_state" in getattr(lapsed, "columns", [])
+    have_renewal = gone is not None and "renewal_state" in getattr(gone, "columns", [])
     if have_renewal:
         from . import renewals as _rnw
-        summ = _rnw.summarize(lapsed["renewal_state"])
+        summ = _rnw.summarize(gone["renewal_state"])
         brk = " · ".join(f"{_rnw.label(k)}: {v}" for k, v in summ.items())
         note = ws.cell(row=r, column=2, value=(
-            "Renewal status from the underwriter's forward pointer "
-            "(J.Pbi.Layers_t): " + brk + ".  'Renewal in progress' = "
-            "manual-inclusion candidate; 'missing from source' = data gap to "
-            "chase; 'NTU/Declined' = genuine non-renewal."))
+            "Genuinely off the book: " + brk + ".  'NTU/Declined' = the renewal "
+            "was offered and lost; 'No renewal pointer' = no renewal recorded. "
+            "(Renewals still in progress are in the table above, not here.)"))
     else:
         note = ws.cell(row=r, column=2, value="Lapsed = expired with no current layer — "
                        "verify true non-renewals, not renewals not yet bound/entered. "
