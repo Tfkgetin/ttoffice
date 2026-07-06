@@ -60,6 +60,14 @@ WB_HEADLINES = [
 ]
 
 
+def _drop_manual(df):
+    """Rows minus manual inclusions — used to keep manual layers (which have no
+    SQL-view columns) out of the engine-vs-view reconciliation."""
+    if "manual_include" in df.columns:
+        return df[~df["manual_include"].fillna(False).astype(bool)]
+    return df
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
@@ -102,10 +110,17 @@ def main():
     if sql_cols:
         import pandas as pd
         chk = [(a, b) for a, b in validate.SQL_CHECKS if b in df.columns]
-        sq = validate.reconcile_columns(df, chk)
+        # Manual inclusions are injected AFTER the SQL, so the view has no
+        # computed columns for them — comparing engine vs view on those rows
+        # always "mismatches" (NaN→0). Exclude them; they're audited on the
+        # Python Adjustments tab, not reconciled against a view that never saw them.
+        rec_df = _drop_manual(df)
+        n_excl = len(df) - len(rec_df)
+        sq = validate.reconcile_columns(rec_df, chk)
         nb = (sq["status"] != "OK").sum()
+        excl_note = f" · {n_excl} manual-inclusion row(s) excluded" if n_excl else ""
         print(f"      engine vs SQL view: "
-              f"{'ALL OK' if nb == 0 else f'{nb} MISMATCHED'} ({len(sq)} checks)")
+              f"{'ALL OK' if nb == 0 else f'{nb} MISMATCHED'} ({len(sq)} checks{excl_note})")
         if nb:
             print(sq[sq["status"] != "OK"].to_string(index=False))
 
@@ -160,16 +175,21 @@ def main():
     print("[6/7] Reconciliation…")
     import pandas as pd
     if args.reconcile:
-        sub = per_layer[per_layer["orbit"] != "LEO"]
+        # Exclude manual inclusions — they carry no SQL-view columns to reconcile
+        # against (injected post-SQL); reconciling them would flag every check.
+        pl_rec = _drop_manual(per_layer)
+        n_excl = len(per_layer) - len(pl_rec)
+        sub = pl_rec[pl_rec["orbit"] != "LEO"]
         sd = [(a, b) for a, b in validate.SCENARIO_CHECKS if a.startswith("sd_")]
         rest = validate.ENGINE_CHECKS + [(a, b) for a, b in validate.SCENARIO_CHECKS
                                          if not a.startswith("sd_")]
-        recon = pd.concat([validate.reconcile_columns(per_layer, rest),
+        recon = pd.concat([validate.reconcile_columns(pl_rec, rest),
                            validate.reconcile_columns(sub, sd)], ignore_index=True)
         n_bad = (recon["status"] != "OK").sum()
+        excl_note = f" · {n_excl} manual-inclusion row(s) excluded" if n_excl else ""
         print(f"      per-layer columns: "
               f"{'ALL OK' if n_bad == 0 else f'{n_bad} MISMATCHED'} "
-              f"({len(recon)} checks)")
+              f"({len(recon)} checks{excl_note})")
 
         # Headline figures reconcile ONLY against same-quarter filed targets.
         # Priority: config's `reconcile_headlines`; else the built-in set when
