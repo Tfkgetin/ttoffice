@@ -69,13 +69,14 @@ renewal_rollforward:
     renewal_uw_status: "Quoted/Awaiting FOT"
     renewal_snapshot: "2026-07-05"
     reason: "Eutelsat fleet renewal 344558 → 385575 — UW-confirmed whole-fleet renewal; carried at Q1 line size, source renewal not yet bound"
-  # Turksat 6A: renewal 377766 is BOUND & on-risk since 2026-04-10, but dropped by
-  # the auto-extract because there is NO MGU param_consortium_splits row covering
-  # 2026-04-10 (confirmed) — the Consortium CTE inner-joins that split. ROOT-CAUSE
-  # FIX is to add the missing MGU split (then the extract self-heals at the true
-  # ceded exposure for Turksat AND any other consortium layer in the gap). Interim:
-  # roll 341429 → 377766 forward at the Q1 book's (already-ceded) line, so it's in
-  # the book now. Retire this once the MGU split is added and 377766 flows in.
+  # Turksat 6A: renewal 377766 (Proportional Facultative, bound) was dropped by
+  # the auto-extract because the MGU param_consortium_splits table didn't cover
+  # its 2026-04-10 inception. That split row has since been ADDED (MGU 2026-04-01→
+  # 2026-06-30, cession 0.5882), so 377766 now flows from source at ~$9.12m and
+  # this roll-forward is REDUNDANT — it auto-retires via the spacecraft-level
+  # double-count safeguard (you'll see "1 manual inclusion skipped"). SAFETY NET
+  # ONLY: delete this rule once a run confirms 377766 comes through from source.
+  # (The 387554 declarations are Consortium Declaration → excluded by methodology.)
   - from_program: 341429
     to_program: 377766
     inception: "2026-04-10"
