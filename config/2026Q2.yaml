@@ -17,28 +17,17 @@ prior_workbook: "output/2026-04-01/Space_RDS_results_2026-04-01.xlsx"   # the FI
 prior_as_at_label: "2026-04-01 (2026Q1 auto book)"
 
 # ---- Manual inclusions -----------------------------------------------------
-# UW-confirmed layers that must be carried this quarter because their renewal
-# is not yet bound / entered in the source as-at the run date. Injected at
-# ingest so they flow through the WHOLE book (engine → scenarios → netting →
-# Summary → Max Risk → Changes). The engine recomputes rpf / cessions /
-# scenario losses from the raw inputs below. Remove an entry once the source
-# picks the renewal up (else it double-counts).
-#   Eutelsat renewals — keyed to program 385575, the ACTUAL 1-July renewal
-#   (J.Pbi.Layers_t snapshot 2026-07-05: program 385575 incepts 2026-07-01,
-#   Renewed From 344558, UW status "Quoted/Awaiting FOT" — i.e. NOT yet bound,
-#   so absent from the IsBound=1 source). The expiring program 344558 went
-#   off-risk 2026-06-30. We previously keyed this inclusion to 344558 (the
-#   expiring id); re-pointed to 385575 to match source truth. Carried at the Q1
-#   line size, dated to the 2026-07-01 → 2027-06-30 renewal period.
-#   is_consortium=false matches the Q1 treatment (no S3123 QS / equity; IGR QS
-#   derived from config). renewed_from_program_id / renewal_uw_status /
-#   renewal_snapshot are documentary (shown on Python Adjustments); the
-#   spacecraft-level double-count safeguard retires each entry once 385575 binds.
-# NOTE: the Eutelsat fleet renewal (344558 → 385575) is now carried by the
-# renewal_rollforward rule below (UW-confirmed whole-fleet renewal). It clones ALL
-# 23 prior Eutelsat birds — not just the 4 hand entries kept here for reference —
-# so the full fleet flows into the book at the Q1 line size. The 4 entries are
-# disabled to avoid double-counting; delete them once the roll-forward is trusted.
+# UW-confirmed single layers to carry because their renewal is not yet bound /
+# entered in source as-at the run date. Injected at ingest so they flow through
+# the WHOLE book (engine → scenarios → netting → Summary → Max Risk → Changes);
+# the engine recomputes rpf / cessions / scenario losses. The spacecraft-level
+# double-count safeguard retires an entry once the source binds the renewal.
+# Use this list for ONE-OFF layers; for a whole-programme renewal use
+# `renewal_rollforward` below (clones the entire prior-book programme).
+#
+# The Eutelsat fleet (344558 → 385575) is now carried by renewal_rollforward,
+# NOT here — the 4 hand entries below are disabled (superseded) and kept only for
+# reference; delete once the roll-forward is trusted.
 manual_include:
   # - {program_id: 385575, layer_id: 1,  spacecraft_id: 16310, spacecraft_name: "EUTELSAT 36D", entity: FIID, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Airbus Defence and Space",             is_consortium: false, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 19814782.42, renewed_from_program_id: 344558, renewal_uw_status: "Quoted/Awaiting FOT", renewal_snapshot: "2026-07-05", reason: "Eutelsat 36D renewal — superseded by renewal_rollforward"}
   # - {program_id: 385575, layer_id: 20, spacecraft_id: 13009, spacecraft_name: "E13G",         entity: FIID, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Airbus Defence and Space (Toulouse)",  is_consortium: false, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 19814782.42, renewed_from_program_id: 344558, renewal_uw_status: "Quoted/Awaiting FOT", renewal_snapshot: "2026-07-05", reason: "Eutelsat E13G renewal — superseded by renewal_rollforward"}
@@ -85,7 +74,7 @@ renewal_rollforward:
     mapping_code: ASO
     renewal_uw_status: "Bound (Signed Off)"
     renewal_snapshot: "2026-07-05"
-    reason: "Turksat 6A renewal 341429 → 377766 — bound/on-risk but dropped by auto-extract (missing MGU consortium split); carried at Q1 line size pending the split-table fix"
+    reason: "Turksat 6A renewal 341429 → 377766 — MGU split (2026-04-01→06-30, 0.5882) now added, so 377766 flows from source (~$9.12m); this is a self-retiring safety net (double-count safeguard skips it) — delete once a run confirms 377766 from source"
   # PENDING UW SIGN-OFF — two whole-fleet renewals confirmed by data (J.Pbi
   # 2026-07-05): both IsBound=0, Direct Open Market (no cession), signed=0 (no
   # source exposure yet), every expiring layer points to the single successor.

@@ -1010,15 +1010,21 @@ def _waterfalls(wb, grid):
         r += 1
     r += 1
 
-    # --- Detailed step-by-step waterfalls for the operating entities ---
-    _section(ws, r, "Cede-down detail — operating entities (FUL, FIID)")
-    nets = grid[grid["entity"].isin(["FUL", "FIID"])].copy()
+    # --- Detailed step-by-step waterfalls for ALL FOUR entities ---
+    # FIHL (group) and FIBL (internal receiver) don't cede internally, so their
+    # IGR-QS / XoL steps read zero — the cascade still shows each entity's gross →
+    # external QS → net. FUL and FIID carry the full cede-down to FIBL.
+    WF_ENTS = ["FIHL", "FUL", "FIBL", "FIID"]
+    _section(ws, r, "Cede-down detail — all entities (FIHL · FUL · FIBL · FIID)")
+    nets = grid[grid["entity"].isin(WF_ENTS)].copy()
     nets["_o"] = nets["scenario"].map({s: i for i, s in enumerate(SCEN_ORDER)})
-    nets = nets.sort_values(["entity", "_o"])
+    _eo = {e: i for i, e in enumerate(WF_ENTS)}
+    nets["_eo"] = nets["entity"].map(_eo)
+    nets = nets.sort_values(["_eo", "_o"])
     base_r = r + 2
     col0 = 2
     amt_ranges = []   # (amount_col, first_amount_row, last_amount_row) per entity
-    for entity in ["FUL", "FIID"]:
+    for entity in WF_ENTS:
         r = base_r
         first_amt = last_amt = None
         for _, row in nets[nets["entity"] == entity].iterrows():
@@ -1763,15 +1769,18 @@ def _changes(wb, changes, per_layer=None):
 
 
 def _book_movement(wb, changes):
-    """Quarter-on-quarter turnover, split into three tables — New business,
-    Renewals, Lapsed — each keyed Program · Layer · Entity · Spacecraft · Orbit
-    · Exposure. Section headers are colour-coded by type; the exposure reads
-    green where the book gains and red where it loses; the Renewals Δ is
-    conditionally formatted by sign. An AutoFilter sits on the largest table.
-      · New business — spacecraft not in the prior book at all
-      · Renewals     — spacecraft in BOTH books (expired + rewritten); prior vs
-                       current exposure so the reprice is visible
-      · Lapsed       — spacecraft dropped with NO current layer (off the book)"""
+    """Quarter-on-quarter turnover, split into four filterable tables keyed
+    Program · Layer · Entity · Spacecraft · Orbit · Inception · Expiry · Exposure.
+    Exposure reads green where the book gains / red where it loses; the Renewals
+    Δ is conditionally formatted by sign; each table carries its own filter.
+      · New business         — spacecraft not in the prior book at all
+      · Renewals             — spacecraft in BOTH books (rewritten, incl. onto a
+                               new programme id); prior vs current so the reprice
+                               shows, with 'Renewed from' naming the prior id
+      · Renewals in progress — expired, renewal recorded but not yet bound / in
+                               the book (from the J.Pbi pointer); the manual-
+                               inclusion / roll-forward worklist
+      · Lapsed               — genuinely off the book (NTU/Declined or no pointer)"""
     if not changes or "layers" not in changes:
         return
     L = changes["layers"]
@@ -1815,7 +1824,7 @@ def _book_movement(wb, changes):
     ren_cur, ren_pri = _sum(ren_new), _sum(ren_old)
 
     ws = wb.create_sheet("Book Movement")
-    _title(ws, "Book movement — new · renewals · lapsed",
+    _title(ws, "Book movement — new · renewals · in-progress · lapsed",
            f"per-layer turnover vs {changes.get('prior_as_at', 'prior')}")
 
     def _nsc(df):
