@@ -947,8 +947,10 @@ def _waterfalls(wb, grid):
     nets = nets.sort_values(["entity", "_o"])
     base_r = r + 2
     col0 = 2
+    amt_ranges = []   # (amount_col, first_amount_row, last_amount_row) per entity
     for entity in ["FUL", "FIID"]:
         r = base_r
+        first_amt = last_amt = None
         for _, row in nets[nets["entity"] == entity].iterrows():
             _d = row.get("detail")
             det = f" — {_d}" if (_d and str(_d) != "nan" and pd.notna(_d)) else ""
@@ -961,9 +963,22 @@ def _waterfalls(wb, grid):
                 _cell(ws, r, col0, label, alt=k % 2 == 0)
                 _cell(ws, r, col0 + 1, v, alt=k % 2 == 0, money=True,
                       bold=label.startswith("Net"))
+                if first_amt is None:
+                    first_amt = r
+                last_amt = r
                 r += 1
             r += 2
+        if first_amt is not None:
+            amt_ranges.append((col0 + 1, first_amt, last_amt))
         col0 += 3
+    # Conditional formatting: retained amounts (Gross/Net, +) read green, ceded
+    # amounts (the 'less:' steps, −) read red — the cascade's give-away is visible.
+    for ac, f0, f1 in amt_ranges:
+        rng = f"{get_column_letter(ac)}{f0}:{get_column_letter(ac)}{f1}"
+        ws.conditional_formatting.add(rng, CellIsRule(
+            operator="greaterThan", formula=["0"], font=Font(name=_FB, size=10, color=GREEN)))
+        ws.conditional_formatting.add(rng, CellIsRule(
+            operator="lessThan", formula=["0"], font=Font(name=_FB, size=10, color="C0392B")))
 
     # --- Native, editable waterfall chart (FUL worst scenario) ---
     # Placed to the right of the detail blocks; backing data in cells so it
@@ -1662,15 +1677,15 @@ def _changes(wb, changes, per_layer=None):
 
 
 def _book_movement(wb, changes):
-    """Per-layer quarter-on-quarter turnover as a single, filterable table.
-    The Category column tells you how each layer moved:
-      · New business  — spacecraft not in the prior book at all
-      · Renewal (in)  — new layer; the spacecraft WAS in the prior book (rewrite)
-      · Renewal (out) — prior layer expired; the spacecraft is rewritten this qtr
-      · Replaced      — prior layer expired; spacecraft continues via another layer
-      · Lapsed        — prior layer expired; spacecraft now fully off the book
-    Exposure is signed (+ on-boarding, − leaving). AutoFilter + frozen header so
-    the reviewer can slice by category / entity / orbit."""
+    """Quarter-on-quarter turnover, split into three tables — New business,
+    Renewals, Lapsed — each keyed Program · Layer · Entity · Spacecraft · Orbit
+    · Exposure. Section headers are colour-coded by type; the exposure reads
+    green where the book gains and red where it loses; the Renewals Δ is
+    conditionally formatted by sign. An AutoFilter sits on the largest table.
+      · New business — spacecraft not in the prior book at all
+      · Renewals     — spacecraft in BOTH books (expired + rewritten); prior vs
+                       current exposure so the reprice is visible
+      · Lapsed       — spacecraft dropped with NO current layer (off the book)"""
     if not changes or "layers" not in changes:
         return
     L = changes["layers"]
@@ -1681,10 +1696,13 @@ def _book_movement(wb, changes):
     def _sid(df):
         return df["spacecraft_id"].astype(str) if "spacecraft_id" in df.columns else pd.Series([], dtype=str)
     nsid, dsid = set(_sid(new)), set(_sid(dropped))
-    lapsed_df = L.get("renewal_gaps")
-    lapsed_scid = (set(lapsed_df["spacecraft_id"].astype(str))
-                   if (lapsed_df is not None and "spacecraft_id" in getattr(lapsed_df, "columns", []))
-                   else (dsid - nsid))
+    ren_sid = nsid & dsid
+    new_biz = new[~_sid(new).isin(dsid)].copy()
+    ren_new = new[_sid(new).isin(ren_sid)].copy()
+    ren_old = dropped[_sid(dropped).isin(ren_sid)].copy()
+    lapsed = L.get("renewal_gaps")
+    if lapsed is None:
+        lapsed = dropped[~_sid(dropped).isin(nsid)].copy()
 
     def _num(v):
         try:
@@ -1692,92 +1710,109 @@ def _book_movement(wb, changes):
         except (TypeError, ValueError):
             return 0.0
 
-    # one signed row per new/dropped layer, tagged with its movement category
-    rows = []   # (cat, entity, spacecraft, program, layer, orbit, signed_exp)
-    for _, row in new.iterrows():
-        cat = "Renewal (in)" if str(row.get("spacecraft_id")) in dsid else "New business"
-        rows.append((cat, str(row.get("entity", "")), str(row.get("spacecraft_name", "")),
-                     row.get("program_id"), row.get("layer_id"),
-                     str(row.get("orbit", "")), _num(row.get("per_sc"))))
-    for _, row in dropped.iterrows():
-        scid = str(row.get("spacecraft_id"))
-        cat = ("Renewal (out)" if scid in nsid
-               else "Lapsed" if scid in lapsed_scid else "Replaced")
-        rows.append((cat, str(row.get("entity", "")), str(row.get("spacecraft_name", "")),
-                     row.get("program_id"), row.get("layer_id"),
-                     str(row.get("orbit", "")), -_num(row.get("per_sc"))))
+    def _sum(df):
+        return float(pd.to_numeric(df.get("per_sc"), errors="coerce").fillna(0).sum()) if len(df) else 0.0
+    nb_x, lap_x = _sum(new_biz), _sum(lapsed)
+    ren_cur, ren_pri = _sum(ren_new), _sum(ren_old)
 
     ws = wb.create_sheet("Book Movement")
     _title(ws, "Book movement — new · renewals · lapsed",
-           f"per-layer turnover vs {changes.get('prior_as_at', 'prior')} · "
-           "exposure signed (+ in / − out) · filter the table below")
-
-    def _tot(cats):
-        return sum(e for c, _, _, _, _, _, e in rows if c in cats)
-    nb_x, ren_in, ren_out = _tot({"New business"}), _tot({"Renewal (in)"}), _tot({"Renewal (out)"})
-    lap_x = _tot({"Lapsed"})
+           f"per-layer turnover vs {changes.get('prior_as_at', 'prior')}")
 
     r = _section(ws, 5, "At a glance")
     r = _kv(ws, r, "New business", nb_x, money=True)
-    r = _kv(ws, r, "Renewals — new legs (in)", ren_in, money=True)
-    ws.cell(row=r - 1, column=4,
-            value=f"expiring legs {ren_out:,.0f} · net {ren_in + ren_out:+,.0f}").font = F_SUB
+    ws.cell(row=r - 1, column=4, value=f"{new_biz['spacecraft_id'].nunique() if len(new_biz) else 0} spacecraft").font = F_SUB
+    r = _kv(ws, r, "Renewals — current exposure", ren_cur, money=True)
+    ws.cell(row=r - 1, column=4, value=f"{len(ren_sid)} spacecraft · was {ren_pri:,.0f} (Δ {ren_cur - ren_pri:+,.0f})").font = F_SUB
     r = _kv(ws, r, "Lapsed (off the book)", lap_x, money=True)
+    ws.cell(row=r - 1, column=4, value=f"{lapsed['spacecraft_id'].nunique() if len(lapsed) else 0} spacecraft").font = F_SUB
     r += 1
 
-    hdrs = ["Category", "Entity", "Spacecraft", "Program", "Layer", "Orbit", "Exposure"]
-    r = _section(ws, r, "All movements")
-    header_row = r
-    r = _hdr(ws, header_row, 2, hdrs, [15, 9, 28, 11, 8, 11, 16])
-    data_start = r
-    catrank = {"New business": 0, "Renewal (in)": 1, "Renewal (out)": 2,
-               "Replaced": 3, "Lapsed": 4}
-    rows.sort(key=lambda t: (catrank.get(t[0], 9), -abs(t[6])))
-    for k, (cat, ent, sc, prog, lay, orb, exp) in enumerate(rows):
-        alt = k % 2 == 0
-        _cell(ws, r, 2, cat, alt=alt)
-        _cell(ws, r, 3, ent, alt=alt)
-        _cell(ws, r, 4, sc, alt=alt)
-        _cell(ws, r, 5, prog, alt=alt)
-        _cell(ws, r, 6, lay, alt=alt)
-        _cell(ws, r, 7, orb, alt=alt)
-        _cell(ws, r, 8, exp, alt=alt, money=True, bold=abs(exp) > 1e7)
-        r += 1
-    last = r - 1
-    if rows:
-        ws.auto_filter.ref = f"B{header_row}:H{last}"   # the filter buttons
-        ws.freeze_panes = f"B{data_start}"              # keep header while scrolling
-        # Conditional formatting — colour each movement type, and the signed
-        # exposure by direction, so the kind of change reads at a glance.
-        cat_rng = f"B{data_start}:B{last}"
-        cat_fill = {"New business": "E3F1E5", "Renewal (in)": "E3ECF5",
-                    "Renewal (out)": "EAF0F6", "Replaced": "FBF1DF",
-                    "Lapsed": "F7E7E4"}
-        cat_font = {"New business": GREEN, "Renewal (in)": ACCENT,
-                    "Renewal (out)": ACCENT, "Replaced": AMBER, "Lapsed": "C0392B"}
-        for label, fill in cat_fill.items():
-            ws.conditional_formatting.add(cat_rng, CellIsRule(
-                operator="equal", formula=[f'"{label}"'],
-                fill=PatternFill("solid", start_color=fill, end_color=fill),
-                font=Font(name=_FB, size=10, bold=True, color=cat_font[label])))
-        exp_rng = f"H{data_start}:H{last}"
-        ws.conditional_formatting.add(exp_rng, CellIsRule(
-            operator="greaterThan", formula=["0"],
-            font=Font(name=_FB, size=10, color=GREEN)))          # on-boarding
-        ws.conditional_formatting.add(exp_rng, CellIsRule(
-            operator="lessThan", formula=["0"],
-            font=Font(name=_FB, size=10, color="C0392B")))       # leaving
+    IDCOLS = ["Program", "Layer", "Entity", "Spacecraft", "Orbit"]
+    IDW = [11, 8, 9, 28, 11]
+    filt = []   # (header_row, last_row, n) per table — pick the largest for the filter
+
+    def _hdr_band(header_row, ncols, hexc):
+        for c in range(2, 2 + ncols):
+            ws.cell(row=header_row, column=c).fill = PatternFill(
+                "solid", start_color=hexc, end_color=hexc)
+
+    def _simple_table(r, title, hexc, df, exp_colour):
+        r = _section(ws, r, title)
+        header_row = r
+        r = _hdr(ws, header_row, 2, IDCOLS + ["Exposure"], IDW + [16])
+        _hdr_band(header_row, len(IDCOLS) + 1, hexc)
+        if not len(df):
+            _cell(ws, r, 2, "— none —"); return r + 2
+        for k, (_, row) in enumerate(df.sort_values("per_sc", ascending=False).iterrows()):
+            alt = k % 2 == 0
+            _cell(ws, r, 2, row.get("program_id"), alt=alt)
+            _cell(ws, r, 3, row.get("layer_id"), alt=alt)
+            _cell(ws, r, 4, str(row.get("entity", "")), alt=alt)
+            _cell(ws, r, 5, str(row.get("spacecraft_name", "")), alt=alt)
+            _cell(ws, r, 6, str(row.get("orbit", "")), alt=alt)
+            c = _cell(ws, r, 7, row.get("per_sc"), alt=alt, money=True,
+                      bold=_num(row.get("per_sc")) > 1e7)
+            c.font = Font(name=_FB, size=10, color=exp_colour,
+                          bold=_num(row.get("per_sc")) > 1e7)
+            r += 1
+        filt.append((header_row, r - 1, len(df)))
+        return r + 1
+
+    r = _simple_table(r, f"New business — {new_biz['spacecraft_id'].nunique() if len(new_biz) else 0} "
+                         f"spacecraft (${nb_x:,.0f})", "E3F1E5", new_biz, GREEN)
+
+    # Renewals — per spacecraft, prior vs current (Δ conditionally formatted)
+    r = _section(ws, r, f"Renewals — {len(ren_sid)} spacecraft "
+                        f"(current ${ren_cur:,.0f} · Δ {ren_cur - ren_pri:+,.0f})")
+    ren_hdr = r
+    r = _hdr(ws, ren_hdr, 2, IDCOLS + ["Prior exp.", "Current exp.", "Δ exposure"],
+             IDW + [15, 15, 15])
+    _hdr_band(ren_hdr, len(IDCOLS) + 3, "E3ECF5")
+    ren_first = r
+    if ren_sid:
+        cur_x = ren_new.groupby("spacecraft_id")["per_sc"].sum()
+        pri_x = ren_old.groupby("spacecraft_id")["per_sc"].sum()
+        meta = ren_new.groupby("spacecraft_id").agg(
+            {"program_id": "first", "layer_id": "first",
+             "spacecraft_name": "first", "entity": "first", "orbit": "first"})
+        order = cur_x.reindex(meta.index).fillna(0).sort_values(ascending=False).index
+        for k, sid in enumerate(order):
+            alt = k % 2 == 0
+            p = float(pri_x.get(sid, 0.0)); c = float(cur_x.get(sid, 0.0))
+            _cell(ws, r, 2, meta.loc[sid, "program_id"], alt=alt)
+            _cell(ws, r, 3, meta.loc[sid, "layer_id"], alt=alt)
+            _cell(ws, r, 4, str(meta.loc[sid, "entity"]), alt=alt)
+            _cell(ws, r, 5, str(meta.loc[sid, "spacecraft_name"]), alt=alt)
+            _cell(ws, r, 6, str(meta.loc[sid, "orbit"]), alt=alt)
+            _cell(ws, r, 7, p, alt=alt, money=True)
+            _cell(ws, r, 8, c, alt=alt, money=True)
+            _cell(ws, r, 9, c - p, alt=alt, money=True, bold=abs(c - p) > 1e6)
+            r += 1
+        # Δ column conditionally formatted by sign
+        drng = f"I{ren_first}:I{r - 1}"
+        ws.conditional_formatting.add(drng, CellIsRule(
+            operator="greaterThan", formula=["0"], font=Font(name=_FB, size=10, color=GREEN)))
+        ws.conditional_formatting.add(drng, CellIsRule(
+            operator="lessThan", formula=["0"], font=Font(name=_FB, size=10, color="C0392B")))
     else:
-        _cell(ws, r, 2, "— no movement vs prior —"); r += 1
+        _cell(ws, r, 2, "— none —"); r += 1
+    r += 1
 
-    note = ws.cell(row=r + 1, column=2,
-                   value="Lapsed = expired with no current layer — verify these are "
-                   "true non-renewals, not renewals not yet bound/entered. "
-                   "Replaced = spacecraft continues via another layer.")
+    r = _simple_table(r, f"Lapsed — {lapsed['spacecraft_id'].nunique() if len(lapsed) else 0} "
+                         f"spacecraft off the book (${lap_x:,.0f})", "F7E7E4", lapsed, "C0392B")
+    note = ws.cell(row=r, column=2, value="Lapsed = expired with no current layer — "
+                   "verify true non-renewals, not renewals not yet bound/entered.")
     note.font = Font(name=_FB, size=9, italic=True, color=SOFT)
-    ws.merge_cells(start_row=r + 1, start_column=2, end_row=r + 1, end_column=8)
+    ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=7)
 
-    for col, w in {"B": 15, "C": 9, "D": 28, "E": 11, "F": 8, "G": 11, "H": 16}.items():
+    # one AutoFilter (Excel allows a single one per sheet) on the largest table
+    if filt:
+        big = max(filt, key=lambda t: t[2])
+        ws.auto_filter.ref = f"B{big[0]}:G{big[1]}"
+
+    for col, w in {"B": 11, "C": 8, "D": 9, "E": 28, "F": 11,
+                   "G": 16, "H": 15, "I": 15}.items():
         ws.column_dimensions[col].width = w
 
 
