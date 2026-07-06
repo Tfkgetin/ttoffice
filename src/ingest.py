@@ -433,8 +433,30 @@ def _apply_manual_includes(df, params):
         return df
     DATE_FIELDS = ("off_risk_date", "on_risk_date", "inception", "expiry",
                    "launch_date")
+    existing_keys = set(df["layer_key"].astype(str)) if "layer_key" in df.columns else set()
     rows, logged = [], []
     for it in incs:
+        # SAFEGUARD against double-counting: once the source binds the renewal,
+        # skip the manual inclusion. Trip if the same layer_key is already in the
+        # feed, OR the spacecraft already has a layer incepting on/after this
+        # inclusion's inception (i.e. the renewal is now live in source).
+        lk = f"{it.get('program_id')}_{it.get('layer_id')}"
+        scid = str(it.get("spacecraft_id"))
+        inc_date = _to_date(it.get("inception"))
+        skip = None
+        if lk in existing_keys:
+            skip = "already in source feed (same layer_key)"
+        elif (scid and inc_date is not None and "spacecraft_id" in df.columns
+              and "inception" in df.columns):
+            same = df[df["spacecraft_id"].astype(str) == scid]
+            if len(same):
+                inc2 = pd.to_datetime(same["inception"], errors="coerce").dt.date
+                if (inc2.dropna() >= inc_date).any():
+                    skip = "renewal already bound in source (spacecraft on-risk from inception)"
+        if skip:
+            logged.append({**it, "status": f"SKIPPED — {skip}"})
+            continue
+
         row = {c: None for c in df.columns}
         for k, v in it.items():
             if k == "reason":
