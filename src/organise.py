@@ -36,6 +36,8 @@ SECTIONS = [
     ]),
     ("B", "Quarter-on-quarter movement", "3E6C8C", [
         ("Changes", "Layer adds / drops and scenario moves vs the prior run"),
+        ("Book Movement",
+         "Per-spacecraft turnover — new business, renewals, and lapsed"),
         ("WF \u00b7 Exposure Bridge",
          "Opening \u2192 closing exposure bridge and composition"),
         ("WF \u00b7 Loss Movement",
