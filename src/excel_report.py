@@ -55,6 +55,12 @@ PCT = '0.0%'
 # Cells stay numeric — colour is applied by conditional formatting, not here.
 DELTA_NUMFMT = '"▲ +"0.0%;"▼ "0.0%;"▲ +"0.0%'
 
+# Renewal-policy verdict → font colour (src/renewals.py severities): data-gap and
+# genuine loss read red, in-progress (manual-inclusion candidate) amber, renewed
+# green, no-pointer grey.
+RENEWAL_SEV_COLOUR = {"gap": "9B2D1F", "lost": "C0392B", "progress": AMBER,
+                      "ok": GREEN, "neutral": SOFT}
+
 SCEN_ORDER = ["Proton Flare", "Space Weather", "Generic Defect",
               "Space Debris", "Max Risk"]
 # Netting-waterfall rows: (label, grid column, sign). Consumed by _waterfalls().
@@ -1809,10 +1815,16 @@ def _book_movement(wb, changes):
         _dcell(ws, r, 7, row.get("inception"), alt=alt)
         _dcell(ws, r, 8, row.get("off_risk_date"), alt=alt)
 
-    def _simple_table(r, title, df, exp_colour, tbl_name):
+    def _simple_table(r, title, df, exp_colour, tbl_name, show_renewal=False):
+        # Lapsed carries a Renewal-status column when the renewal-policy check has
+        # classified it (from the J.Pbi forward pointer); otherwise it's absent.
+        renewal = show_renewal and df is not None and "renewal_label" in getattr(df, "columns", [])
+        heads = IDCOLS + ["Exposure"] + (["Renewal status"] if renewal else [])
+        widths = IDW + [16] + ([34] if renewal else [])
+        last_col = 10 if renewal else 9
         r = _section(ws, r, title)
         header_row = r
-        r = _hdr(ws, header_row, 2, IDCOLS + ["Exposure"], IDW + [16], white=True)
+        r = _hdr(ws, header_row, 2, heads, widths, white=True)
         if not len(df):
             _cell(ws, r, 2, "— none —"); return r + 2
         for k, (_, row) in enumerate(df.sort_values("per_sc", ascending=False).iterrows()):
@@ -1822,8 +1834,13 @@ def _book_movement(wb, changes):
                       bold=_num(row.get("per_sc")) > 1e7)
             c.font = Font(name=_FB, size=10, color=exp_colour,
                           bold=_num(row.get("per_sc")) > 1e7)
+            if renewal:
+                sev = RENEWAL_SEV_COLOUR.get(str(row.get("renewal_severity", "")), INK)
+                rc = _cell(ws, r, 10, str(row.get("renewal_label", "")), alt=alt)
+                rc.font = Font(name=_FB, size=10, color=sev,
+                               bold=str(row.get("renewal_severity", "")) in ("gap", "progress"))
             r += 1
-        _add_table(ws, tbl_name, 2, header_row, 9, r - 1)
+        _add_table(ws, tbl_name, 2, header_row, last_col, r - 1)
         return r + 1
 
     r = _simple_table(r, f"New business — {new_biz['spacecraft_id'].nunique() if len(new_biz) else 0} "
@@ -1865,14 +1882,29 @@ def _book_movement(wb, changes):
 
     r = _simple_table(r, f"Lapsed — {lapsed['spacecraft_id'].nunique() if len(lapsed) else 0} "
                          f"spacecraft off the book (${lap_x:,.0f})", lapsed, "C0392B",
-                      "BM_Lapsed")
-    note = ws.cell(row=r, column=2, value="Lapsed = expired with no current layer — "
-                   "verify true non-renewals, not renewals not yet bound/entered.")
+                      "BM_Lapsed", show_renewal=True)
+    have_renewal = lapsed is not None and "renewal_state" in getattr(lapsed, "columns", [])
+    if have_renewal:
+        from . import renewals as _rnw
+        summ = _rnw.summarize(lapsed["renewal_state"])
+        brk = " · ".join(f"{_rnw.label(k)}: {v}" for k, v in summ.items())
+        note = ws.cell(row=r, column=2, value=(
+            "Renewal status from the underwriter's forward pointer "
+            "(J.Pbi.Layers_t): " + brk + ".  'Renewal in progress' = "
+            "manual-inclusion candidate; 'missing from source' = data gap to "
+            "chase; 'NTU/Declined' = genuine non-renewal."))
+    else:
+        note = ws.cell(row=r, column=2, value="Lapsed = expired with no current layer — "
+                       "verify true non-renewals, not renewals not yet bound/entered. "
+                       "(Renewal-pointer feed not available this run — spacecraft "
+                       "heuristic used.)")
     note.font = Font(name=_FB, size=9, italic=True, color=SOFT)
-    ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=9)
+    note.alignment = Alignment(wrap_text=True, vertical="top")
+    ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=10)
+    ws.row_dimensions[r].height = 28
 
     for col, w in {"B": 11, "C": 8, "D": 9, "E": 28, "F": 11, "G": 12, "H": 12,
-                   "I": 16, "J": 15, "K": 15}.items():
+                   "I": 16, "J": 27, "K": 15}.items():
         ws.column_dimensions[col].width = w
 
 
@@ -2393,11 +2425,19 @@ def _python_adjustments(wb, per_layer, excluded, corrections=None, params=None,
         r = _section(ws, r, f"Manual inclusions ({n_inj} injected · "
                             f"${mi_exp:,.0f}) — UW-confirmed layers injected at "
                             "ingest (renewal not yet bound in source)")
+        # Renewal lineage (from the J.Pbi forward pointer, recorded in config):
+        # e.g. "renews-from 344558 · Quoted/Awaiting FOT".
+        for c in mincs:
+            rf = c.get("renewed_from_program_id")
+            us = c.get("renewal_uw_status")
+            c["_renewal"] = (f"renews-from {rf} · {us}" if rf and us
+                             else (f"renews-from {rf}" if rf else (us or "")))
         cols = [("program_id", "Program", 11), ("layer_id", "Layer", 8),
                 ("entity", "Entity", 9), ("spacecraft_name", "Spacecraft", 24),
                 ("orbit", "Orbit", 10), ("off_risk_date", "Off-risk", 12),
                 ("layer_signed_exposure", "Exposure", 15),
-                ("status", "Status", 20), ("reason", "Reason", 48)]
+                ("_renewal", "Renewal (source)", 30),
+                ("status", "Status", 20), ("reason", "Reason", 44)]
         r = _hdr(ws, r, 2, [h for _, h, _ in cols], [w for _, _, w in cols])
         for k, c in enumerate(mincs):
             alt = k % 2 == 0
@@ -2410,6 +2450,8 @@ def _python_adjustments(wb, per_layer, excluded, corrections=None, params=None,
                              money=(field == "layer_signed_exposure"))
                 if field == "status" and skipped:
                     cell.font = F_FLAG   # safeguard tripped — not injected
+                if field == "_renewal" and v:
+                    cell.font = Font(name=_FB, size=10, color=AMBER)
             r += 1
         r += 1
 

@@ -80,6 +80,25 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
     if chg is None and changes is not None:
         chg = changes  # caller-supplied (e.g. frozen-workbook) Q-on-Q fallback
 
+    # Renewal-policy check: classify the quarter's dropped/expiring layers from
+    # the underwriter's forward pointer (J.Pbi.Layers_t snapshot) — renewed &
+    # bound / in progress / NTU-Declined / no pointer. Optional & guarded; falls
+    # back silently to the spacecraft heuristic when the pointer feed is absent.
+    if chg and "layers" in chg:
+        from . import renewals
+        watch = renewals.load_watch(params)
+        if watch is not None:
+            cur_pids = set(per_layer["program_id"]) if "program_id" in per_layer else set()
+            for key in ("renewal_gaps", "dropped", "new"):
+                fr = chg["layers"].get(key)
+                if fr is not None and len(fr):
+                    chg["layers"][key] = renewals.attach_watch(fr, watch, cur_pids)
+            gaps = chg["layers"].get("renewal_gaps")
+            if gaps is not None and "renewal_state" in getattr(gaps, "columns", []):
+                summ = renewals.summarize(gaps["renewal_state"])
+                print("      renewal check (lapsed): "
+                      + ", ".join(f"{renewals.label(k)}={v}" for k, v in summ.items()))
+
     excluded = getattr(engine_mod.run_engine, "last_excluded", None)
     corrections = getattr(ingest_mod.load, "last_corrections", None)
     manual_includes = getattr(ingest_mod.load, "last_manual_includes", None)
