@@ -16,6 +16,23 @@ as_at_date: "2026-07-01"
 prior_workbook: "output/2026-04-01/Space_RDS_results_2026-04-01.xlsx"   # the FILED Q1 auto book (update path to the final Q1 run)
 prior_as_at_label: "2026-04-01 (2026Q1 auto book)"
 
+# ---- Manual inclusions -----------------------------------------------------
+# UW-confirmed layers that must be carried this quarter because their renewal
+# is not yet bound / entered in the source as-at the run date. Injected at
+# ingest so they flow through the WHOLE book (engine → scenarios → netting →
+# Summary → Max Risk → Changes). The engine recomputes rpf / cessions /
+# scenario losses from the raw inputs below. Remove an entry once the source
+# picks the renewal up (else it double-counts).
+#   Eutelsat renewals (program 344558) — expired 2026-06-30, UW (JJ 2026-07-06)
+#   confirmed they renew and need manual inclusion; carried at the Q1 line size,
+#   re-dated to the 2026-07-01 → 2027-06-30 period. is_consortium=false matches
+#   the Q1 treatment (no S3123 QS / equity; IGR QS derived from config).
+manual_include:
+  - {program_id: 344558, layer_id: 1,  spacecraft_id: 16310, spacecraft_name: "EUTELSAT 36D", entity: FIID, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Airbus Defence and Space",             is_consortium: false, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 19814782.42, reason: "Eutelsat 36D renewal — UW-confirmed manual inclusion (source renewal not yet bound as-at 2026-07-01)"}
+  - {program_id: 344558, layer_id: 20, spacecraft_id: 13009, spacecraft_name: "E13G",         entity: FIID, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Airbus Defence and Space (Toulouse)",  is_consortium: false, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 19814782.42, reason: "Eutelsat E13G renewal — UW-confirmed manual inclusion"}
+  - {program_id: 344558, layer_id: 22, spacecraft_id: 14159, spacecraft_name: "E10B",         entity: FIID, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Thales Alenia Space France (Cannes)", is_consortium: false, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 19814782.42, reason: "Eutelsat E10B renewal — UW-confirmed manual inclusion"}
+  - {program_id: 344558, layer_id: 23, spacecraft_id: 13008, spacecraft_name: "E13F",         entity: FIID, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Airbus Defence and Space (Toulouse)",  is_consortium: false, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 19814782.42, reason: "Eutelsat E13F renewal — UW-confirmed manual inclusion"}
+
 # ---- Time decay (Risk Period Factor) -------- Input Data O10:P14
 # Banded on full months between as-at date and Off_Risk_Date (largest band <= months)
 rpf_bands:

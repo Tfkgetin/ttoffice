@@ -413,9 +413,55 @@ def attach_lloyds_bus_type(df: pd.DataFrame, params) -> pd.DataFrame:
     return df
 
 
+def _apply_manual_includes(df, params):
+    """Inject UW-confirmed manual layers (e.g. renewals not yet bound in the
+    source as-at the run date) so they flow through the ENTIRE engine — rpf,
+    cessions, scenarios, netting, summary, Max Risk. Each config entry supplies
+    the raw layer inputs; the engine recomputes everything derived. Rows are
+    tagged manual_include=True and logged to load.last_manual_includes for the
+    Python Adjustments tab. Each entry:
+        {program_id, layer_id, spacecraft_id, spacecraft_name, entity,
+         mapping_code, orbit, bus_manufacturer, is_consortium, inception,
+         on_risk_date, off_risk_date, layer_signed_exposure, reason}
+    """
+    incs = params.raw.get("manual_include") or []
+    load.last_manual_includes = []
+    df = df.copy()
+    if "manual_include" not in df.columns:
+        df["manual_include"] = False
+    if not incs:
+        return df
+    DATE_FIELDS = ("off_risk_date", "on_risk_date", "inception", "expiry",
+                   "launch_date")
+    rows, logged = [], []
+    for it in incs:
+        row = {c: None for c in df.columns}
+        for k, v in it.items():
+            if k == "reason":
+                continue
+            row[k] = _to_date(v) if k in DATE_FIELDS else v
+        # derived / synced fields the engine relies on
+        if it.get("program_id") is not None and it.get("layer_id") is not None:
+            row["layer_key"] = f"{it['program_id']}_{it['layer_id']}"
+        exp = it.get("layer_signed_exposure", it.get("per_sc"))
+        if exp is not None:
+            row["layer_signed_exposure"] = float(exp)
+            row["per_sc"] = float(exp)
+        if row.get("on_risk_date") is None and row.get("inception") is not None:
+            row["on_risk_date"] = row["inception"]
+        row["manual_include"] = True
+        rows.append(row)
+        logged.append({**it, "status": "INCLUDED"})
+    add = pd.DataFrame(rows).reindex(columns=df.columns)
+    out = pd.concat([df, add], ignore_index=True)
+    load.last_manual_includes = logged
+    return out
+
+
 def load(params) -> pd.DataFrame:
     ing = params.ingest
     load.last_corrections = []
+    load.last_manual_includes = []
     if ing["source"] == "workbook":
         df = load_from_workbook(ing["workbook_path"], ing.get("sheet", "Input Data"),
                                 ing.get("first_data_row", 20))
@@ -429,6 +475,7 @@ def load(params) -> pd.DataFrame:
     else:
         raise ValueError(f"Unknown source {ing['source']}")
     df = _apply_corrections(df, params)
+    df = _apply_manual_includes(df, params)
     if (params.raw.get("s3123_rds") or {}).get("enabled"):
         df = attach_lloyds_bus_type(df, params)
     return df
