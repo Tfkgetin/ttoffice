@@ -102,6 +102,9 @@ def main():
     if skipped:
         print(f"      · {len(skipped)} manual inclusion(s) skipped — renewal now "
               f"in source (double-count safeguard)")
+    split_warn = ingest.check_consortium_split_coverage(p)
+    if split_warn:
+        print(f"      ⚠ {split_warn}")
 
     print("[2/7] Engine…")
     df = engine.run_engine(df, p)

@@ -427,6 +427,43 @@ def attach_lloyds_bus_type(df: pd.DataFrame, params) -> pd.DataFrame:
     return df
 
 
+def check_consortium_split_coverage(params):
+    """Pre-flight data check: the extract's consortium population INNER-JOINs
+    rds.param_consortium_splits on the MGU cession covering each layer's
+    inception, so a consortium layer incepting AFTER the latest MGU split's End
+    Date is silently dropped (this is what hid the Turksat 6A renewal). Warn if
+    the MGU split table doesn't reach the as-at date. Returns a warning string or
+    None; SQL-only and never raises."""
+    ing = getattr(params, "ingest", {}) or {}
+    if ing.get("source") != "sql":
+        return None
+    sql_cfg = dict(ing.get("sql") or {})
+    try:
+        import pyodbc
+        driver = sql_cfg.get("driver") or _pick_driver()
+        conn = (f"DRIVER={{{driver}}};SERVER={sql_cfg['server']};"
+                f"DATABASE={sql_cfg['database']};Trusted_Connection=yes;")
+        if "18" in driver:
+            conn += "TrustServerCertificate=yes;"
+        cn = pyodbc.connect(conn, timeout=30)
+        row = pd.read_sql(
+            "SELECT MAX([End Date]) AS mx FROM [SpaceTrax_Data].[rds]."
+            "param_consortium_splits WHERE [Controlling Body]='MGU'", cn)
+        cn.close()
+    except Exception:  # noqa: BLE001 — optional check, never break the run
+        return None
+    if not len(row) or pd.isna(row["mx"].iloc[0]):
+        return None
+    mx = pd.to_datetime(row["mx"].iloc[0]).date()
+    as_at = getattr(params, "as_at", None)
+    if as_at is not None and mx < as_at:
+        return (f"MGU consortium-split table ends {mx} (before as-at {as_at}) — "
+                f"any consortium layer incepting after {mx} is EXCLUDED from the "
+                f"extract (missing split row). Extend rds.param_consortium_splits "
+                f"or those layers will be silently dropped.")
+    return None
+
+
 def _rollforward_dicts(prior, rules):
     """Turn `renewal_rollforward` rules into manual_include dicts by cloning the
     prior book's layers for each `from_program` into `to_program` at the renewal
