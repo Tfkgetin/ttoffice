@@ -293,6 +293,18 @@ def build_changes(cur_layers: pd.DataFrame, cur_grid: pd.DataFrame,
     move = cm - pm
     moved = move[move.abs() > 1]
 
+    # Renewal-gap flag: dropped layers whose spacecraft is absent from the
+    # current book entirely (no continuing or renewed layer). A 1-July annual
+    # tranche that expires at quarter-close with its renewals not yet bound /
+    # entered in the source surfaces here — the trough looks like a loss until
+    # the renewals come in. Distinguishes a genuine non-renewal from a timing gap.
+    cur_scid = (set(cur["spacecraft_id"].dropna().astype(str))
+                if "spacecraft_id" in cur.columns else set())
+    if "spacecraft_id" in dropped.columns and cur_scid:
+        gaps = dropped[~dropped["spacecraft_id"].astype(str).isin(cur_scid)].copy()
+    else:
+        gaps = dropped.iloc[0:0].copy()
+
     layers = {
         "summary": {
             "new_layers": int(len(new)),
@@ -301,8 +313,10 @@ def build_changes(cur_layers: pd.DataFrame, cur_grid: pd.DataFrame,
             "new_exposure": float(new["per_sc"].sum()),
             "dropped_exposure": float(dropped["per_sc"].sum()),
             "net_move": float(move.sum()),
+            "renewal_gap_layers": int(len(gaps)),
+            "renewal_gap_exposure": float(gaps["per_sc"].sum()) if len(gaps) else 0.0,
         },
-        "new": new, "dropped": dropped,
+        "new": new, "dropped": dropped, "renewal_gaps": gaps,
     }
 
     # scenario movement — join the two grids on entity × scenario.
