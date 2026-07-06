@@ -127,6 +127,13 @@ def main():
             print(f"      prior: {len(prior_layers)} layers from workbook · "
                   f"{s['new_layers']} new / {s['dropped_layers']} dropped / "
                   f"{s['moved_layers']} moved this quarter")
+            gap_n = s.get("renewal_gap_layers", 0)
+            if gap_n:
+                gap_x = s.get("renewal_gap_exposure", 0.0)
+                print(f"      ⚠ renewal-gap: {gap_n} dropped layer(s) "
+                      f"(${gap_x:,.0f} exposure) have NO current layer for the "
+                      f"same spacecraft — verify these are true non-renewals, "
+                      f"not renewals not yet bound/entered. See the Changes tab.")
         except Exception as e:
             print(f"      WARNING: prior seeding failed ({e}) — "
                   f"book will render as baseline")

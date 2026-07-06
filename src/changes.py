@@ -31,14 +31,27 @@ def layer_changes(cur: pd.DataFrame, prior: pd.DataFrame) -> dict:
             ["spacecraft_name", "entity", "bus_manufacturer"]]
         moved = moved.join(meta).sort_values("delta", key=abs, ascending=False)
 
+    # Renewal-gap flag: dropped layers whose spacecraft is absent from the
+    # current book entirely (no continuing/renewed layer) — candidates for a
+    # renewal not yet bound. Separates a real non-renewal from a timing trough.
+    cur_scid = (set(cur["spacecraft_id"].dropna().astype(str))
+                if "spacecraft_id" in cur.columns else set())
+    if "spacecraft_id" in dropped.columns and cur_scid:
+        gaps = dropped[~dropped["spacecraft_id"].astype(str).isin(cur_scid)].copy()
+    else:
+        gaps = dropped.iloc[0:0].copy()
+
     return {
         "new": new, "dropped": dropped, "moved": moved.reset_index(),
+        "renewal_gaps": gaps,
         "summary": {
             "new_layers": len(new), "dropped_layers": len(dropped),
             "moved_layers": len(moved),
             "new_exposure": float(new["per_sc"].sum()) if len(new) else 0.0,
             "dropped_exposure": float(dropped["per_sc"].sum()) if len(dropped) else 0.0,
             "net_move": float(moved["delta"].sum()) if len(moved) else 0.0,
+            "renewal_gap_layers": len(gaps),
+            "renewal_gap_exposure": float(gaps["per_sc"].sum()) if len(gaps) else 0.0,
         },
     }
 

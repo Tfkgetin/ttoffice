@@ -1624,6 +1624,34 @@ def _changes(wb, changes, per_layer=None):
             _cell(ws, r, 5, row.get("per_sc"), alt=alt, money=True)
             r += 1
 
+    # Renewal gaps — dropped spacecraft with NO current layer at all. These are
+    # either genuine non-renewals or renewals not yet bound/entered (a 1-July
+    # tranche expiring at quarter-close shows up here). Surfaced so the QoQ
+    # trough is explained, not mistaken for a loss.
+    rg = changes["layers"].get("renewal_gaps")
+    if rg is not None and len(rg):
+        r += 1
+        gx = float(rg["per_sc"].sum())
+        r = _section(ws, r, f"Renewal gaps — {len(rg)} spacecraft fully off "
+                            f"the book (${gx:,.0f})")
+        c = ws.cell(row=r, column=2, value="Expired with no current/renewed "
+                    "layer — verify these are true non-renewals, not renewals "
+                    "not yet bound or entered in the source.")
+        c.font = Font(name=_FB, size=9, italic=True, color=SOFT)
+        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=6)
+        ws.row_dimensions[r].height = 26
+        r += 2
+        r = _hdr(ws, r, 2, ["Spacecraft", "Entity", "Orbit", "Exposure"],
+                 [28, 10, 12, 15])
+        for k, (_, row) in enumerate(rg.sort_values("per_sc", ascending=False)
+                                     .head(15).iterrows()):
+            alt = k % 2 == 0
+            _cell(ws, r, 2, str(row.get("spacecraft_name", "")), alt=alt)
+            _cell(ws, r, 3, str(row.get("entity", "")), alt=alt)
+            _cell(ws, r, 4, str(row.get("orbit", "")), alt=alt)
+            _cell(ws, r, 5, row.get("per_sc"), alt=alt, money=True)
+            r += 1
+
     # Pin Changes-tab column widths explicitly (this tab mixes a wide-label
     # matrix, money tables, and long merged narrative text; autofit would
     # over-widen B from the merged note, so we set them by hand and skip autofit).
