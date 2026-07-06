@@ -18,6 +18,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.formatting.rule import DataBarRule, CellIsRule, ColorScaleRule
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.chart import BarChart, Reference, Series
 from openpyxl.chart.label import DataLabelList
 from openpyxl.chart.shapes import GraphicalProperties
@@ -42,6 +43,9 @@ F_TOTAL = Font(name=_FB, size=10, bold=True, color=NAVY)
 F_OK = Font(name=_FB, size=10, bold=True, color=GREEN)
 F_FLAG = Font(name=_FB, size=10, bold=True, color=AMBER)
 FILL_HDR = PatternFill("solid", start_color=NAVY)
+FILL_WHITE = PatternFill("solid", start_color="FFFFFF", end_color="FFFFFF")
+F_HDR_DARK = Font(name=_FB, size=10, bold=True, color=NAVY)  # dark text for white headers
+BORDER_HDR_WHITE = Border(bottom=Side(style="medium", color=NAVY))
 FILL_ALT = PatternFill("solid", start_color=CREAM)
 FILL_TOTAL = PatternFill("solid", start_color=TOTALFILL)
 THIN = Border(bottom=Side(style="thin", color=RULE))
@@ -143,18 +147,62 @@ def _print_setup(ws, params, title):
     ws.oddFooter.right.size = 8
 
 
-def _hdr(ws, r, col0, headers, widths=None):
+def _hdr(ws, r, col0, headers, widths=None, white=False):
+    """Table header row. Default is a solid navy band with white text; pass
+    white=True for a clean white header (navy bold text, medium navy underline)
+    — used where a lighter, print-friendly look is wanted."""
     if widths:
         for i, w in enumerate(widths):
             ws.column_dimensions[get_column_letter(col0 + i)].width = w
     for j, h in enumerate(headers):
         c = ws.cell(row=r, column=col0 + j, value=h)
-        c.font = F_HDR
-        c.fill = FILL_HDR
+        if white:
+            c.font = F_HDR_DARK
+            c.fill = FILL_WHITE
+            c.border = BORDER_HDR_WHITE
+        else:
+            c.font = F_HDR
+            c.fill = FILL_HDR
         c.alignment = Alignment(horizontal="left" if j == 0 else "right",
                                 vertical="center")
     ws.row_dimensions[r].height = 19
     return r + 1
+
+
+def _dcell(ws, r, c, val, alt=False):
+    """Date cell (inception / off-risk). NaT → blank."""
+    d = None
+    if val is not None and pd.notna(val):
+        try:
+            d = pd.to_datetime(val).date()
+        except (TypeError, ValueError):
+            d = None
+    cell = ws.cell(row=r, column=c, value=d)
+    cell.font = F_CELL
+    cell.border = THIN
+    if alt:
+        cell.fill = FILL_ALT
+    if d is not None:
+        cell.number_format = "dd-mmm-yy"
+        cell.alignment = Alignment(horizontal="right")
+    return cell
+
+
+def _add_table(ws, name, first_col, header_row, last_col, last_row):
+    """Wrap a rendered block in an Excel Table so it carries its own filter
+    dropdowns. Excel allows only ONE classic AutoFilter per sheet but many
+    Tables — this is how all tables on a sheet get filters. Row stripes are off
+    (we stripe manually) and the white header formatting applied by the caller
+    wins over the table style. No-ops if there is no data row."""
+    if last_row < header_row + 1:
+        return
+    ref = (f"{get_column_letter(first_col)}{header_row}:"
+           f"{get_column_letter(last_col)}{last_row}")
+    tbl = Table(displayName=name, ref=ref)
+    tbl.tableStyleInfo = TableStyleInfo(
+        name="TableStyleLight1", showFirstColumn=False, showLastColumn=False,
+        showRowStripes=False, showColumnStripes=False)
+    ws.add_table(tbl)
 
 
 def _cell(ws, r, c, val, alt=False, money=False, pct=False, bold=False,
@@ -922,20 +970,20 @@ def _waterfalls(wb, grid):
     ws = wb.create_sheet("Netting Waterfalls")
     _title(ws, "Netting waterfalls", "layer-exact · per entity × scenario")
 
-    # --- Combined four-entity gross/net summary (mirrors manual combined table) ---
-    r = _section(ws, 5, "Combined netting — gross & net by entity")
+    # --- Four-entity summary — gross and net as SEPARATE tables (white headers) ---
     ents = ["FIHL", "FUL", "FIBL", "FIID"]
-    r = _hdr(ws, r, 2, ["Scenario", "Basis"] + ents, [16, 8, 15, 15, 15, 15])
+    r = 5
     for blk, basis in [("gross", "Gross"), ("net", "Net")]:
+        r = _section(ws, r, f"Combined netting — {basis.lower()} by entity")
+        r = _hdr(ws, r, 2, ["Scenario"] + ents, [16, 15, 15, 15, 15], white=True)
         for k, scen in enumerate(SCEN_ORDER):
             alt = k % 2 == 0
             _cell(ws, r, 2, scen, alt=alt)
-            _cell(ws, r, 3, basis, alt=alt)
             for j, ent in enumerate(ents):
                 row = grid[(grid["entity"] == ent) & (grid["scenario"] == scen)]
                 v = float(row.iloc[0][blk]) if len(row) and pd.notna(
                     row.iloc[0].get(blk)) else None
-                _cell(ws, r, 4 + j, v, alt=alt, money=True)
+                _cell(ws, r, 3 + j, v, alt=alt, money=True)
             r += 1
         r += 1
     r += 1
@@ -956,7 +1004,7 @@ def _waterfalls(wb, grid):
             det = f" — {_d}" if (_d and str(_d) != "nan" and pd.notna(_d)) else ""
             ws.cell(row=r, column=col0,
                     value=f"{entity} · {row['scenario']}{det}").font = F_SECT
-            r = _hdr(ws, r + 1, col0, ["Step", "Amount"], [30, 16])
+            r = _hdr(ws, r + 1, col0, ["Step", "Amount"], [30, 16], white=True)
             for k, (label, field, sign) in enumerate(WF_ROWS):
                 v = row.get(field)
                 v = None if pd.isna(v) else sign * abs(float(v))
@@ -1347,6 +1395,17 @@ def _delta_formula_cell(ws, row, col, formula, alt=False, bold=False):
     return cell
 
 
+def _delta_signcolour(ws, rng):
+    """Green ▲ up / red ▼ down on a range of Δ% cells. Applied by conditional
+    formatting so the colour stays correct if the live formulas recompute."""
+    ws.conditional_formatting.add(rng, CellIsRule(
+        operator="greaterThan", formula=["0"],
+        font=Font(name=_FB, size=10, bold=True, color=GREEN)))
+    ws.conditional_formatting.add(rng, CellIsRule(
+        operator="lessThan", formula=["0"],
+        font=Font(name=_FB, size=10, bold=True, color="C0392B")))
+
+
 def _manual_qoq_tables(ws, r, cur, pri):
     """FIX(recon 2026Q1 — align QoQ with the MANUAL Changes tab): the manual
     book's quarter-on-quarter view is EXPOSURE-level, not RDS-value level:
@@ -1421,6 +1480,7 @@ def _manual_qoq_tables(ws, r, cur, pri):
             r += 1
         r += 1
     r = _hdr(ws, r, 2, ["\u0394%"] + CO, None)
+    d_first = r
     for i, ent in enumerate(ENT_ROWS):
         bold = ent in ("FIHL (FUL+FIID)", "Whole portfolio")
         _cell(ws, r, 2, ent, alt=i % 2, bold=bold)
@@ -1431,6 +1491,8 @@ def _manual_qoq_tables(ws, r, cur, pri):
                                 f"=IFERROR({col}{rc}/{col}{rp}-1,0)",
                                 alt=i % 2, bold=bold)
         r += 1
+    # \u0394% grid: up green / down red (matches the headline matrix convention)
+    _delta_signcolour(ws, f"C{d_first}:{get_column_letter(2 + len(CO))}{r - 1}")
     r += 1
 
     # ---- Table 1b: whole-portfolio exposure bridge by reason ----
@@ -1499,12 +1561,14 @@ def _manual_qoq_tables(ws, r, cur, pri):
         Rc, Rp = rpfadj(cur), rpfadj(pri)
         r = _hdr(ws, r, 2, ["", "Prior", "Current", "\u0394%"],
                  [24, 16, 16, 10])
+        rpf_first = r
         for i, k in enumerate(Rc):
             _cell(ws, r, 2, k, alt=i % 2)
             _cell(ws, r, 3, Rp[k], alt=i % 2, money=True)
             _cell(ws, r, 4, Rc[k], alt=i % 2, money=True)
             _delta_formula_cell(ws, r, 5, f"=IFERROR(D{r}/C{r}-1,0)", alt=i % 2)
             r += 1
+        _delta_signcolour(ws, f"E{rpf_first}:E{r - 1}")
         r += 1
     return r
 
@@ -1728,91 +1792,87 @@ def _book_movement(wb, changes):
     ws.cell(row=r - 1, column=4, value=f"{lapsed['spacecraft_id'].nunique() if len(lapsed) else 0} spacecraft").font = F_SUB
     r += 1
 
-    IDCOLS = ["Program", "Layer", "Entity", "Spacecraft", "Orbit"]
-    IDW = [11, 8, 9, 28, 11]
-    filt = []   # (header_row, last_row, n) per table — pick the largest for the filter
+    # Column order: Program · Layer · Entity · Spacecraft · Orbit · Inception ·
+    # Expiry, then the exposure column(s). Headers are white (clean/print) with
+    # the exposure font coloured by direction; each table is a real Excel Table
+    # so all three carry their own filter dropdowns.
+    IDCOLS = ["Program", "Layer", "Entity", "Spacecraft", "Orbit",
+              "Inception", "Expiry"]
+    IDW = [11, 8, 9, 28, 11, 12, 12]
 
-    def _hdr_band(header_row, ncols, hexc):
-        for c in range(2, 2 + ncols):
-            ws.cell(row=header_row, column=c).fill = PatternFill(
-                "solid", start_color=hexc, end_color=hexc)
+    def _idrow(r, row, alt):
+        _cell(ws, r, 2, row.get("program_id"), alt=alt)
+        _cell(ws, r, 3, row.get("layer_id"), alt=alt)
+        _cell(ws, r, 4, str(row.get("entity", "")), alt=alt)
+        _cell(ws, r, 5, str(row.get("spacecraft_name", "")), alt=alt)
+        _cell(ws, r, 6, str(row.get("orbit", "")), alt=alt)
+        _dcell(ws, r, 7, row.get("inception"), alt=alt)
+        _dcell(ws, r, 8, row.get("off_risk_date"), alt=alt)
 
-    def _simple_table(r, title, hexc, df, exp_colour):
+    def _simple_table(r, title, df, exp_colour, tbl_name):
         r = _section(ws, r, title)
         header_row = r
-        r = _hdr(ws, header_row, 2, IDCOLS + ["Exposure"], IDW + [16])
-        _hdr_band(header_row, len(IDCOLS) + 1, hexc)
+        r = _hdr(ws, header_row, 2, IDCOLS + ["Exposure"], IDW + [16], white=True)
         if not len(df):
             _cell(ws, r, 2, "— none —"); return r + 2
         for k, (_, row) in enumerate(df.sort_values("per_sc", ascending=False).iterrows()):
             alt = k % 2 == 0
-            _cell(ws, r, 2, row.get("program_id"), alt=alt)
-            _cell(ws, r, 3, row.get("layer_id"), alt=alt)
-            _cell(ws, r, 4, str(row.get("entity", "")), alt=alt)
-            _cell(ws, r, 5, str(row.get("spacecraft_name", "")), alt=alt)
-            _cell(ws, r, 6, str(row.get("orbit", "")), alt=alt)
-            c = _cell(ws, r, 7, row.get("per_sc"), alt=alt, money=True,
+            _idrow(r, row, alt)
+            c = _cell(ws, r, 9, row.get("per_sc"), alt=alt, money=True,
                       bold=_num(row.get("per_sc")) > 1e7)
             c.font = Font(name=_FB, size=10, color=exp_colour,
                           bold=_num(row.get("per_sc")) > 1e7)
             r += 1
-        filt.append((header_row, r - 1, len(df)))
+        _add_table(ws, tbl_name, 2, header_row, 9, r - 1)
         return r + 1
 
     r = _simple_table(r, f"New business — {new_biz['spacecraft_id'].nunique() if len(new_biz) else 0} "
-                         f"spacecraft (${nb_x:,.0f})", "E3F1E5", new_biz, GREEN)
+                         f"spacecraft (${nb_x:,.0f})", new_biz, GREEN, "BM_New")
 
     # Renewals — per spacecraft, prior vs current (Δ conditionally formatted)
     r = _section(ws, r, f"Renewals — {len(ren_sid)} spacecraft "
                         f"(current ${ren_cur:,.0f} · Δ {ren_cur - ren_pri:+,.0f})")
     ren_hdr = r
     r = _hdr(ws, ren_hdr, 2, IDCOLS + ["Prior exp.", "Current exp.", "Δ exposure"],
-             IDW + [15, 15, 15])
-    _hdr_band(ren_hdr, len(IDCOLS) + 3, "E3ECF5")
+             IDW + [15, 15, 15], white=True)
     ren_first = r
     if ren_sid:
         cur_x = ren_new.groupby("spacecraft_id")["per_sc"].sum()
         pri_x = ren_old.groupby("spacecraft_id")["per_sc"].sum()
         meta = ren_new.groupby("spacecraft_id").agg(
             {"program_id": "first", "layer_id": "first",
-             "spacecraft_name": "first", "entity": "first", "orbit": "first"})
+             "spacecraft_name": "first", "entity": "first", "orbit": "first",
+             "inception": "first", "off_risk_date": "first"})
         order = cur_x.reindex(meta.index).fillna(0).sort_values(ascending=False).index
         for k, sid in enumerate(order):
             alt = k % 2 == 0
             p = float(pri_x.get(sid, 0.0)); c = float(cur_x.get(sid, 0.0))
-            _cell(ws, r, 2, meta.loc[sid, "program_id"], alt=alt)
-            _cell(ws, r, 3, meta.loc[sid, "layer_id"], alt=alt)
-            _cell(ws, r, 4, str(meta.loc[sid, "entity"]), alt=alt)
-            _cell(ws, r, 5, str(meta.loc[sid, "spacecraft_name"]), alt=alt)
-            _cell(ws, r, 6, str(meta.loc[sid, "orbit"]), alt=alt)
-            _cell(ws, r, 7, p, alt=alt, money=True)
-            _cell(ws, r, 8, c, alt=alt, money=True)
-            _cell(ws, r, 9, c - p, alt=alt, money=True, bold=abs(c - p) > 1e6)
+            _idrow(r, meta.loc[sid], alt)
+            _cell(ws, r, 9, p, alt=alt, money=True)
+            _cell(ws, r, 10, c, alt=alt, money=True)
+            _cell(ws, r, 11, c - p, alt=alt, money=True, bold=abs(c - p) > 1e6)
             r += 1
         # Δ column conditionally formatted by sign
-        drng = f"I{ren_first}:I{r - 1}"
+        drng = f"K{ren_first}:K{r - 1}"
         ws.conditional_formatting.add(drng, CellIsRule(
             operator="greaterThan", formula=["0"], font=Font(name=_FB, size=10, color=GREEN)))
         ws.conditional_formatting.add(drng, CellIsRule(
             operator="lessThan", formula=["0"], font=Font(name=_FB, size=10, color="C0392B")))
+        _add_table(ws, "BM_Renewals", 2, ren_hdr, 11, r - 1)
     else:
         _cell(ws, r, 2, "— none —"); r += 1
     r += 1
 
     r = _simple_table(r, f"Lapsed — {lapsed['spacecraft_id'].nunique() if len(lapsed) else 0} "
-                         f"spacecraft off the book (${lap_x:,.0f})", "F7E7E4", lapsed, "C0392B")
+                         f"spacecraft off the book (${lap_x:,.0f})", lapsed, "C0392B",
+                      "BM_Lapsed")
     note = ws.cell(row=r, column=2, value="Lapsed = expired with no current layer — "
                    "verify true non-renewals, not renewals not yet bound/entered.")
     note.font = Font(name=_FB, size=9, italic=True, color=SOFT)
-    ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=7)
+    ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=9)
 
-    # one AutoFilter (Excel allows a single one per sheet) on the largest table
-    if filt:
-        big = max(filt, key=lambda t: t[2])
-        ws.auto_filter.ref = f"B{big[0]}:G{big[1]}"
-
-    for col, w in {"B": 11, "C": 8, "D": 9, "E": 28, "F": 11,
-                   "G": 16, "H": 15, "I": 15}.items():
+    for col, w in {"B": 11, "C": 8, "D": 9, "E": 28, "F": 11, "G": 12, "H": 12,
+                   "I": 16, "J": 15, "K": 15}.items():
         ws.column_dimensions[col].width = w
 
 
