@@ -86,6 +86,15 @@ renewal_rollforward:
     renewal_uw_status: "Bound (Signed Off)"
     renewal_snapshot: "2026-07-05"
     reason: "Turksat 6A renewal 341429 → 377766 — bound/on-risk but dropped by auto-extract (missing MGU consortium split); carried at Q1 line size pending the split-table fix"
+  # PENDING UW SIGN-OFF — two whole-fleet renewals confirmed by data (J.Pbi
+  # 2026-07-05): both IsBound=0, Direct Open Market (no cession), signed=0 (no
+  # source exposure yet), every expiring layer points to the single successor.
+  # Uncomment each once the UW confirms the fleet renews (as JJ did for Eutelsat).
+  # ~$140m combined; verify the Arabsat prior-book count (6 birds vs 12 source
+  # expiring layers) with the UW before relying on it. Arabsat is at NBI stage
+  # (earlier/less certain) than Inmarsat GX (Quoted/Awaiting FOT).
+  # - {from_program: 344664, to_program: 382904, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", mapping_code: ASO, renewal_uw_status: "NBI", renewal_snapshot: "2026-07-05", reason: "Arabsat fleet renewal 344664 → 382904 — pending UW sign-off; unbound (NBI), carried at Q1 line size"}
+  # - {from_program: 343724, to_program: 385466, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", mapping_code: ASO, renewal_uw_status: "Quoted/Awaiting FOT", renewal_snapshot: "2026-07-05", reason: "Inmarsat GX fleet renewal 343724 → 385466 — pending UW sign-off; unbound (Quoted), carried at Q1 line size"}
 
 # ---- Time decay (Risk Period Factor) -------- Input Data O10:P14
 # Banded on full months between as-at date and Off_Risk_Date (largest band <= months)
