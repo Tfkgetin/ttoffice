@@ -175,6 +175,26 @@ def _layer_key(pid, lid):
     return f"{_n(pid)}_{_n(lid)}"
 
 
+def overrides_watch(overrides):
+    """Build a watch-style frame from `renewal_overrides` config — UW-confirmed
+    old→new programme links the J.Pbi pointer doesn't carry (e.g. WorldView
+    341568 → 369418). Programme-level rows consumed by attach_watch's fallback.
+    CLASSIFICATION ONLY — never injects exposure. Returns None if empty."""
+    rows = []
+    for o in overrides or []:
+        fp, tp = o.get("from_program"), o.get("to_program")
+        if fp is None or tp is None:
+            continue
+        rows.append({"program_id": fp, "layer_id": 0, "renewed_to_program_id": tp,
+                     "renewed_to_status": o.get("status", "Bound (Signed Off)")})
+    if not rows:
+        return None
+    w = pd.DataFrame(rows)
+    w["renewed_to_program_id"] = pd.to_numeric(
+        w["renewed_to_program_id"], errors="coerce").astype("Int64")
+    return w
+
+
 def load_watch(params):
     """Load the renewal-watch set (expiring space layers + forward pointers) from
     the PBI snapshot. Optional: returns a DataFrame keyed by `layer_key`, or None

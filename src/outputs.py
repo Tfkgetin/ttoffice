@@ -86,7 +86,13 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
     # back silently to the spacecraft heuristic when the pointer feed is absent.
     if chg and "layers" in chg:
         from . import renewals
+        import pandas as _pd
         watch = renewals.load_watch(params)
+        # Merge UW-confirmed renewal_overrides (old→new links J.Pbi doesn't carry,
+        # e.g. WorldView 341568 → 369418) into the watch — classification only.
+        ow = renewals.overrides_watch(params.raw.get("renewal_overrides"))
+        if ow is not None:
+            watch = ow if watch is None else _pd.concat([watch, ow], ignore_index=True)
         if watch is not None:
             cur_pids = set(per_layer["program_id"]) if "program_id" in per_layer else set()
             for key in ("renewal_gaps", "dropped", "new"):
