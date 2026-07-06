@@ -102,6 +102,73 @@ def summarize(states) -> dict:
     return {k: int(v) for k, v in s.value_counts().items()}
 
 
+def _idn_val(v):
+    """Normalise an id: 16310 / 16310.0 / '16310' / '16310.0' → '16310'; NA → ''."""
+    if v is None:
+        return ""
+    try:
+        if pd.isna(v):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    try:
+        return str(int(float(v)))
+    except (TypeError, ValueError):
+        s = str(v).strip()
+        return "" if s.lower() in ("nan", "<na>", "none") else s
+
+
+def _idn_col(df, col):
+    if col in df.columns:
+        return df[col].map(_idn_val)
+    return pd.Series([""] * len(df), index=df.index, dtype=str)
+
+
+def split_movement(new, dropped):
+    """Split a quarter's turnover into new_biz / ren_new / ren_old / lapsed.
+
+    Primary signal is the underwriter's renewal pointer — a NEW layer whose
+    renewed_from_program_id points at a dropped programme, or a DROPPED layer
+    whose renewed_to_program_id points at a new programme — with normalised
+    spacecraft-id match as the fallback when the pointer feed is absent. Ids are
+    normalised so a float/text mismatch (16310 vs 16310.0) never splits a true
+    renewal, and a renewal onto a NEW programme id (e.g. 344558 → 385575) lands
+    in Renewals, not New business. Adds a normalised `_sid` column to each frame.
+    Returns {new_biz, ren_new, ren_old, lapsed, ren_sid}."""
+    new = new.copy() if new is not None else pd.DataFrame()
+    dropped = dropped.copy() if dropped is not None else pd.DataFrame()
+    for f in (new, dropped):
+        if len(f):
+            f["_sid"] = _idn_col(f, "spacecraft_id")
+            f["_pid"] = _idn_col(f, "program_id")
+    if len(new):
+        new["_rf"] = _idn_col(new, "renewed_from_program_id")
+    if len(dropped):
+        dropped["_rt"] = _idn_col(dropped, "renewed_to_program_id")
+
+    d_pids = set(dropped["_pid"]) - {""} if len(dropped) else set()
+    n_pids = set(new["_pid"]) - {""} if len(new) else set()
+    d_sids = set(dropped["_sid"]) - {""} if len(dropped) else set()
+    n_sids = set(new["_sid"]) - {""} if len(new) else set()
+    d_rt = set(dropped["_rt"]) - {""} if len(dropped) else set()   # dropped renewed TO
+    n_rf = set(new["_rf"]) - {""} if len(new) else set()           # new renewed FROM
+
+    if len(new):
+        m = new["_rf"].isin(d_pids) | new["_pid"].isin(d_rt) | new["_sid"].isin(d_sids)
+        new_biz, ren_new = new[~m].copy(), new[m].copy()
+    else:
+        new_biz = ren_new = new
+    if len(dropped):
+        m = dropped["_rt"].isin(n_pids) | dropped["_pid"].isin(n_rf) | dropped["_sid"].isin(n_sids)
+        ren_old, lapsed = dropped[m].copy(), dropped[~m].copy()
+    else:
+        ren_old = lapsed = dropped
+    ren_sid = ((set(ren_new["_sid"]) if len(ren_new) else set())
+               | (set(ren_old["_sid"]) if len(ren_old) else set())) - {""}
+    return {"new_biz": new_biz, "ren_new": ren_new, "ren_old": ren_old,
+            "lapsed": lapsed, "ren_sid": ren_sid}
+
+
 def _layer_key(pid, lid):
     def _n(v):
         try:

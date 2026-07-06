@@ -93,11 +93,17 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
                 fr = chg["layers"].get(key)
                 if fr is not None and len(fr):
                     chg["layers"][key] = renewals.attach_watch(fr, watch, cur_pids)
-            gaps = chg["layers"].get("renewal_gaps")
-            if gaps is not None and "renewal_state" in getattr(gaps, "columns", []):
-                summ = renewals.summarize(gaps["renewal_state"])
-                print("      renewal check (lapsed): "
-                      + ", ".join(f"{renewals.label(k)}={v}" for k, v in summ.items()))
+        # Pointer-aware movement split — the single source of truth for what
+        # renewed vs lapsed. renewal_gaps is reset to the layers that truly went
+        # off the book (renewal not present as a new/renewed layer), so the
+        # Changes tab, the console summary and Book Movement's Lapsed table agree.
+        sp = renewals.split_movement(chg["layers"].get("new"), chg["layers"].get("dropped"))
+        chg["layers"]["renewal_gaps"] = sp["lapsed"]
+        gaps = sp["lapsed"]
+        if gaps is not None and len(gaps) and "renewal_state" in getattr(gaps, "columns", []):
+            summ = renewals.summarize(gaps["renewal_state"])
+            print("      renewal check (lapsed): "
+                  + ", ".join(f"{renewals.label(k)}={v}" for k, v in summ.items()))
 
     excluded = getattr(engine_mod.run_engine, "last_excluded", None)
     corrections = getattr(ingest_mod.load, "last_corrections", None)
