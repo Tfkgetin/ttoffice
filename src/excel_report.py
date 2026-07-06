@@ -1747,6 +1747,26 @@ def _book_movement(wb, changes):
     if rows:
         ws.auto_filter.ref = f"B{header_row}:H{last}"   # the filter buttons
         ws.freeze_panes = f"B{data_start}"              # keep header while scrolling
+        # Conditional formatting — colour each movement type, and the signed
+        # exposure by direction, so the kind of change reads at a glance.
+        cat_rng = f"B{data_start}:B{last}"
+        cat_fill = {"New business": "E3F1E5", "Renewal (in)": "E3ECF5",
+                    "Renewal (out)": "EAF0F6", "Replaced": "FBF1DF",
+                    "Lapsed": "F7E7E4"}
+        cat_font = {"New business": GREEN, "Renewal (in)": ACCENT,
+                    "Renewal (out)": ACCENT, "Replaced": AMBER, "Lapsed": "C0392B"}
+        for label, fill in cat_fill.items():
+            ws.conditional_formatting.add(cat_rng, CellIsRule(
+                operator="equal", formula=[f'"{label}"'],
+                fill=PatternFill("solid", start_color=fill, end_color=fill),
+                font=Font(name=_FB, size=10, bold=True, color=cat_font[label])))
+        exp_rng = f"H{data_start}:H{last}"
+        ws.conditional_formatting.add(exp_rng, CellIsRule(
+            operator="greaterThan", formula=["0"],
+            font=Font(name=_FB, size=10, color=GREEN)))          # on-boarding
+        ws.conditional_formatting.add(exp_rng, CellIsRule(
+            operator="lessThan", formula=["0"],
+            font=Font(name=_FB, size=10, color="C0392B")))       # leaving
     else:
         _cell(ws, r, 2, "— no movement vs prior —"); r += 1
 
