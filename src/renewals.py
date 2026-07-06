@@ -140,26 +140,23 @@ def split_movement(new, dropped):
     for f in (new, dropped):
         if len(f):
             f["_sid"] = _idn_col(f, "spacecraft_id")
-            f["_pid"] = _idn_col(f, "program_id")
-    if len(new):
-        new["_rf"] = _idn_col(new, "renewed_from_program_id")
-    if len(dropped):
-        dropped["_rt"] = _idn_col(dropped, "renewed_to_program_id")
 
-    d_pids = set(dropped["_pid"]) - {""} if len(dropped) else set()
-    n_pids = set(new["_pid"]) - {""} if len(new) else set()
     d_sids = set(dropped["_sid"]) - {""} if len(dropped) else set()
     n_sids = set(new["_sid"]) - {""} if len(new) else set()
-    d_rt = set(dropped["_rt"]) - {""} if len(dropped) else set()   # dropped renewed TO
-    n_rf = set(new["_rf"]) - {""} if len(new) else set()           # new renewed FROM
 
+    # Pairing is SPACECRAFT-level: a layer shows in Renewals only when the same
+    # spacecraft exists on both sides. Normalised ids so 16310 == 16310.0, and a
+    # renewal onto a NEW programme id still pairs because the spacecraft is
+    # unchanged. Programme-level pointers are NOT used to pair — a fleet that only
+    # partly renews (e.g. 4 of 23 birds carried) must leave the other 19 in
+    # Lapsed, not drag them out with no current-side exposure to show.
     if len(new):
-        m = new["_rf"].isin(d_pids) | new["_pid"].isin(d_rt) | new["_sid"].isin(d_sids)
+        m = new["_sid"].isin(d_sids)
         new_biz, ren_new = new[~m].copy(), new[m].copy()
     else:
         new_biz = ren_new = new
     if len(dropped):
-        m = dropped["_rt"].isin(n_pids) | dropped["_pid"].isin(n_rf) | dropped["_sid"].isin(n_sids)
+        m = dropped["_sid"].isin(n_sids)
         ren_old, lapsed = dropped[m].copy(), dropped[~m].copy()
     else:
         ren_old = lapsed = dropped
@@ -240,4 +237,26 @@ def attach_watch(frame, watch, current_pids):
     cols = [c for c in cols if c in w.columns]
     f = f.merge(w[cols].drop_duplicates("_rk"), on="_rk", how="left",
                 suffixes=("", "_w")).drop(columns=["_rk"])
+
+    # Programme-level fallback. The prior workbook often numbers layers 1..N in
+    # its own scheme, so the layer-level join above misses (344558_1 never equals
+    # 344558_465240) and every layer reads "No renewal pointer". The renewal is a
+    # programme→programme fact, so fill any still-missing pointer from the layer's
+    # PROGRAMME dominant pointer in the watch.
+    if "renewed_to_program_id" in f.columns and "renewed_to_program_id" in w.columns:
+        wv = w.dropna(subset=["renewed_to_program_id"]).copy()
+        if len(wv):
+            wv["_pk"] = wv["program_id"].map(_idn_val)
+
+            def _mode(s):
+                m = s.dropna()
+                return m.mode().iloc[0] if len(m.mode()) else (m.iloc[0] if len(m) else None)
+            pmap = wv.groupby("_pk")["renewed_to_program_id"].agg(_mode)
+            fpk = f["program_id"].map(_idn_val)
+            miss = f["renewed_to_program_id"].isna()
+            f.loc[miss, "renewed_to_program_id"] = fpk[miss].map(pmap)
+            if "renewed_to_status" in wv.columns and "renewed_to_status" in f.columns:
+                smap = wv.groupby("_pk")["renewed_to_status"].agg(_mode)
+                sm = f["renewed_to_status"].isna()
+                f.loc[sm, "renewed_to_status"] = fpk[sm].map(smap)
     return annotate(f, current_pids)
