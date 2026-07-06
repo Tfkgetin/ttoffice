@@ -175,6 +175,23 @@ def _hdr(ws, r, col0, headers, widths=None, white=False):
     return r + 1
 
 
+def _fcell(ws, r, c, formula, alt=False, money=False, pct=False, bold=False):
+    """A cell holding a live Excel FORMULA (not a baked value) so derived numbers
+    recompute when their source cells change — used for Δ / Δ% / running totals
+    that would otherwise go stale if a base cell is edited."""
+    cell = ws.cell(row=r, column=c, value=formula)
+    cell.font = F_TOTAL if bold else F_CELL
+    cell.border = THIN
+    if alt:
+        cell.fill = FILL_ALT
+    if money:
+        cell.number_format = MONEY
+    elif pct:
+        cell.number_format = PCT
+    cell.alignment = Alignment(horizontal="right")
+    return cell
+
+
 def _dcell(ws, r, c, val, alt=False):
     """Date cell (inception / off-risk). NaT → blank."""
     d = None
@@ -1033,12 +1050,20 @@ def _waterfalls(wb, grid):
             ws.cell(row=r, column=col0,
                     value=f"{entity} · {row['scenario']}{det}").font = F_SECT
             r = _hdr(ws, r + 1, col0, ["Step", "Amount"], [30, 16], white=True)
+            block_first = r     # first step row of this scenario block
+            _colL = get_column_letter(col0 + 1)
             for k, (label, field, sign) in enumerate(WF_ROWS):
-                v = row.get(field)
-                v = None if pd.isna(v) else sign * abs(float(v))
                 _cell(ws, r, col0, label, alt=k % 2 == 0)
-                _cell(ws, r, col0 + 1, v, alt=k % 2 == 0, money=True,
-                      bold=label.startswith("Net"))
+                if label.startswith("Net"):
+                    # Net = live SUM of the (signed) steps above it, so the
+                    # cascade always ties and never drifts from a baked value.
+                    _fcell(ws, r, col0 + 1,
+                           f"=SUM({_colL}{block_first}:{_colL}{r - 1})",
+                           alt=k % 2 == 0, money=True, bold=True)
+                else:
+                    v = row.get(field)
+                    v = None if pd.isna(v) else sign * abs(float(v))
+                    _cell(ws, r, col0 + 1, v, alt=k % 2 == 0, money=True)
                 if first_amt is None:
                     first_amt = r
                 last_amt = r
@@ -1655,15 +1680,15 @@ def _changes(wb, changes, per_layer=None):
                         "Δ Net", "Δ Net %"], [10, 16, 15, 15, 14, 11])
     for k, (_, row) in enumerate(sc.iterrows()):
         alt = k % 2 == 0
-        d_net_pct = (row["d_net"] / row["prior_net"]) if (row.get("prior_net")
-                     and row.get("d_net") is not None) else None
         _cell(ws, r, 2, row["entity"], alt=alt)
         _cell(ws, r, 3, row["scenario"], alt=alt)
         _cell(ws, r, 4, row["cur_net"], alt=alt, money=True)
         _cell(ws, r, 5, row["prior_net"], alt=alt, money=True)
-        _cell(ws, r, 6, row["d_net"], alt=alt, money=True,
-              bold=(row["d_net"] is not None and abs(row["d_net"]) > 1e6))
-        _cell(ws, r, 7, d_net_pct, alt=alt, pct=True)
+        # Δ Net and Δ% are LIVE formulas off Current (D) / Prior (E) so they
+        # recompute if either is edited — not baked values that go stale.
+        _fcell(ws, r, 6, f"=D{r}-E{r}", alt=alt, money=True,
+               bold=(row["d_net"] is not None and abs(row["d_net"]) > 1e6))
+        _fcell(ws, r, 7, f"=IFERROR((D{r}-E{r})/E{r},0)", alt=alt, pct=True)
         r += 1
     r += 1
 
@@ -1683,9 +1708,10 @@ def _changes(wb, changes, per_layer=None):
         _cell(ws, r, 3, scen, alt=alt)
         _cell(ws, r, 4, row.get("cur_gross"), alt=alt, money=True)
         _cell(ws, r, 5, row.get("prior_gross"), alt=alt, money=True)
-        _cell(ws, r, 6, row.get("d_gross"), alt=alt, money=True,
-              bold=(row.get("d_gross") is not None and abs(row.get("d_gross", 0)) > 1e6))
-        _cell(ws, r, 7, row.get("d_gross_pct"), alt=alt, pct=True)
+        # Δ Gross / Δ% as live formulas off Current (D) / Prior (E).
+        _fcell(ws, r, 6, f"=D{r}-E{r}", alt=alt, money=True,
+               bold=(row.get("d_gross") is not None and abs(row.get("d_gross", 0)) > 1e6))
+        _fcell(ws, r, 7, f"=IFERROR((D{r}-E{r})/E{r},0)", alt=alt, pct=True)
         r += 1
     r += 1
 
