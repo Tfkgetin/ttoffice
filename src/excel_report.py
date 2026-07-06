@@ -1763,16 +1763,15 @@ def _book_movement(wb, changes):
     if new is None or dropped is None or "spacecraft_id" not in getattr(new, "columns", []):
         return
 
-    def _sid(df):
-        return df["spacecraft_id"].astype(str) if "spacecraft_id" in df.columns else pd.Series([], dtype=str)
-    nsid, dsid = set(_sid(new)), set(_sid(dropped))
-    ren_sid = nsid & dsid
-    new_biz = new[~_sid(new).isin(dsid)].copy()
-    ren_new = new[_sid(new).isin(ren_sid)].copy()
-    ren_old = dropped[_sid(dropped).isin(ren_sid)].copy()
-    lapsed = L.get("renewal_gaps")
-    if lapsed is None:
-        lapsed = dropped[~_sid(dropped).isin(nsid)].copy()
+    # New / Renewal / Lapsed split — pointer-primary, spacecraft-fallback. Shared
+    # with outputs.export (renewal_gaps + the console summary) so every tab agrees
+    # on which layers renewed vs lapsed. This is why a renewal onto a NEW
+    # programme id (e.g. Eutelsat 344558 → 385575) lands in Renewals, not New.
+    from . import renewals as _rnw
+    sp = _rnw.split_movement(new, dropped)
+    new_biz, ren_new, ren_old, lapsed = (sp["new_biz"], sp["ren_new"],
+                                         sp["ren_old"], sp["lapsed"])
+    ren_sid = sp["ren_sid"]
 
     def _num(v):
         try:
@@ -1854,9 +1853,13 @@ def _book_movement(wb, changes):
              IDW + [15, 15, 15], white=True)
     ren_first = r
     if ren_sid:
-        cur_x = ren_new.groupby("spacecraft_id")["per_sc"].sum()
-        pri_x = ren_old.groupby("spacecraft_id")["per_sc"].sum()
-        meta = ren_new.groupby("spacecraft_id").agg(
+        # Pair prior vs current by the NORMALISED spacecraft id so a renewal onto
+        # a new programme still lines up (and a float/text id mismatch never
+        # orphans the prior exposure). Prior side may sit on a different programme
+        # id than current — that is the reprice we want to show.
+        cur_x = ren_new.groupby("_sid")["per_sc"].sum()
+        pri_x = ren_old.groupby("_sid")["per_sc"].sum()
+        meta = ren_new.groupby("_sid").agg(
             {"program_id": "first", "layer_id": "first",
              "spacecraft_name": "first", "entity": "first", "orbit": "first",
              "inception": "first", "off_risk_date": "first"})
