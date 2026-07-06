@@ -29,6 +29,11 @@ from src import ingest, engine, scenarios, netting as net_mod, validate, outputs
 # basis, headline across the book); the ex-add-on split is in the Summary memo
 # columns and on the "S3123 & Equity (IG)" tab. FIBL is not targeted (receiver
 # basis, one hand-keyed manual cell on Max Risk).
+# The built-in headline targets are the FILED 2026Q1 figures. They are only
+# meaningful for a 2026Q1 run; other quarters must supply their own via the
+# config key `reconcile_headlines` (list of {entity, scenario, field, target}),
+# or the headline check is skipped rather than comparing against the wrong quarter.
+WB_HEADLINES_QUARTER = "2026Q1"
 WB_HEADLINES = [
     # (entity, scenario, field, corrected 2026Q1 value)
     ("FIHL", "Proton Flare",   "gross",  52_806_166),
@@ -155,20 +160,41 @@ def main():
               f"{'ALL OK' if n_bad == 0 else f'{n_bad} MISMATCHED'} "
               f"({len(recon)} checks)")
 
-        hl = []
-        for ent, scen, field, target in WB_HEADLINES:
-            row = grid[(grid["entity"] == ent) & (grid["scenario"] == scen)]
-            ours = float(row.iloc[0][field]) if len(row) else float("nan")
-            hl.append(validate.reconcile_value(f"{ent} · {scen} · {field}", ours, target))
-        hl = pd.DataFrame(hl)
-        bad = hl[hl["status"] != "OK"]
-        print(f"      headline figures:  "
-              f"{'ALL OK' if len(bad) == 0 else f'{len(bad)} MISMATCHED'} "
-              f"({len(hl)} checks)")
-        if len(bad):
-            print(bad.to_string(index=False))
-        recon = pd.concat([recon, hl.rename(columns={"figure": "column"})],
-                          ignore_index=True)
+        # Headline figures reconcile ONLY against same-quarter filed targets.
+        # Priority: config's `reconcile_headlines`; else the built-in set when
+        # this run IS that quarter; else skip (comparing e.g. Q2 to Q1 targets
+        # produces meaningless mismatches).
+        cfg_hl = (p.raw or {}).get("reconcile_headlines")
+        if cfg_hl:
+            targets = [(h["entity"], h["scenario"], h["field"], float(h["target"]))
+                       for h in cfg_hl]
+            tgt_src = f"config · {p.quarter}"
+        elif p.quarter == WB_HEADLINES_QUARTER:
+            targets = WB_HEADLINES
+            tgt_src = f"built-in · {WB_HEADLINES_QUARTER}"
+        else:
+            targets = None
+
+        if targets:
+            hl = []
+            for ent, scen, field, target in targets:
+                row = grid[(grid["entity"] == ent) & (grid["scenario"] == scen)]
+                ours = float(row.iloc[0][field]) if len(row) else float("nan")
+                hl.append(validate.reconcile_value(
+                    f"{ent} · {scen} · {field}", ours, target))
+            hl = pd.DataFrame(hl)
+            bad = hl[hl["status"] != "OK"]
+            print(f"      headline figures ({tgt_src}): "
+                  f"{'ALL OK' if len(bad) == 0 else f'{len(bad)} MISMATCHED'} "
+                  f"({len(hl)} checks)")
+            if len(bad):
+                print(bad.to_string(index=False))
+            recon = pd.concat([recon, hl.rename(columns={"figure": "column"})],
+                              ignore_index=True)
+        else:
+            print(f"      headline figures: skipped — no filed targets for "
+                  f"{p.quarter} (built-in targets are {WB_HEADLINES_QUARTER}). "
+                  f"Add `reconcile_headlines:` to the config to enable.")
     else:
         recon = pd.DataFrame([{"column": "reconcile", "status": "SKIPPED"}])
 
