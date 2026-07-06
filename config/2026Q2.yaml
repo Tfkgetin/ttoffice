@@ -283,7 +283,7 @@ data_corrections:
 # is actually fine (covered elsewhere / self-insured / renews next quarter).
 reconciliation_notes:
   # UW disposition of 2026Q2 "No renewal pointer" lapses (Teams, 2026-07):
-  - {program_id: 341568, category: "Lapse — covered elsewhere", date_logged: "2026Q2", note: "WorldView Legion attaches to fleet policy 369418 (incepted Feb 2026) — covered, not a renewal. Exposure sits under 369418; the Book Movement 'lapsed' line for 341568 is display-only. VERIFY 369418 is in the current book (no double-count with a roll-forward)."}
+  - {program_id: 341568, category: "Lapse — covered elsewhere", date_logged: "2026Q2", note: "WorldView / Maxar Legion Fleet 341568 (expired 2026-05-02) continues as 369418 'Legion Satellites In-Orbit Fleet'. VERIFIED in the book: 369418 = 12 ASO / Direct Open Market layers, IsBound=1, on-risk 2026-02-05→2027-02-04, ~$90m signed. Covered and counted under 369418 — do NOT roll forward (double-count). The Book Movement 'lapsed' line for 341568 is display-only (renewal pointer unset in J.Pbi)."}
   - {program_id: 278759, category: "Lapse — genuine (self-insured)", date_logged: "2026Q2", note: "SXM-10 / Sirius XM do not buy in-orbit insurance — genuine non-renewal, no policy to renew. Correctly off the book; expected lapse each quarter (do not chase)."}
   - {program_id: 277977, category: "Lapse — genuine (self-insured)", date_logged: "2026Q2", note: "SXM-10 (2nd programme) — Sirius XM self-insure in-orbit; genuine non-renewal."}
   - {program_id: 328274, category: "Lapse — future renewal", date_logged: "2026Q2", note: "Spainsat NG-1 renews 2026-08-01 (after the 1-July as-at) — legitimately off the book for 2026Q2, returns in 2026Q3. Not a loss, a timing gap."}
