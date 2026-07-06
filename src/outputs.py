@@ -82,12 +82,13 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
 
     excluded = getattr(engine_mod.run_engine, "last_excluded", None)
     corrections = getattr(ingest_mod.load, "last_corrections", None)
+    manual_includes = getattr(ingest_mod.load, "last_manual_includes", None)
     excel_report.write_results(
         str(out / f"Space_RDS_results_{params.as_at}.xlsx"),
         per_layer, sw, mr, summary, params,
         source=params.ingest.get("source", "?"), recon=recon,
         changes=chg, excluded=excluded,
-        corrections=corrections)
+        corrections=corrections, manual_includes=manual_includes)
 
     # S3123 (Lloyd's) RDS — separate syndicate tab + reconciliation
     if s3grid is not None:

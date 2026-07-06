@@ -83,6 +83,11 @@ def main():
     print("[1/7] Ingest…")
     df = ingest.load(p)
     print(f"      {len(df)} rows · {df['layer_key'].nunique()} layers")
+    mi = getattr(ingest.load, "last_manual_includes", None) or []
+    if mi:
+        mx = sum(float(c.get("layer_signed_exposure") or c.get("per_sc") or 0) for c in mi)
+        print(f"      + {len(mi)} manual inclusion(s) (${mx:,.0f}) injected — "
+              f"see Python Adjustments tab")
 
     print("[2/7] Engine…")
     df = engine.run_engine(df, p)

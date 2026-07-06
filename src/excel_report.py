@@ -2165,7 +2165,8 @@ def _audit(wb, per_layer, params, source, recon, excluded):
     ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=4)
 
 
-def _python_adjustments(wb, per_layer, excluded, corrections=None, params=None):
+def _python_adjustments(wb, per_layer, excluded, corrections=None, params=None,
+                        manual_includes=None):
     """Merged Excluded + Manual Overrides + Data Corrections — every pipeline
     add / remove / field-override with reasons. One consolidated audit view."""
     ws = wb.create_sheet("Python Adjustments")
@@ -2262,6 +2263,32 @@ def _python_adjustments(wb, per_layer, excluded, corrections=None, params=None):
                 cell = _cell(ws, r, 2 + j, v, alt=alt)
                 if j == 5 and v == "NOT FOUND":
                     cell.font = F_FLAG
+            r += 1
+        r += 1
+
+    # Manual inclusions (config `manual_include`, injected at ingest) —
+    # UW-confirmed layers carried because their renewal is not yet bound in the
+    # source. They flow through the whole engine; documented here for audit.
+    mincs = manual_includes or []
+    if mincs:
+        mi_exp = sum(float(c.get("layer_signed_exposure") or c.get("per_sc") or 0)
+                     for c in mincs)
+        r = _section(ws, r, f"Manual inclusions ({len(mincs)} · "
+                            f"${mi_exp:,.0f}) — UW-confirmed layers injected at "
+                            "ingest (renewal not yet bound in source)")
+        cols = [("program_id", "Program", 11), ("layer_id", "Layer", 8),
+                ("entity", "Entity", 9), ("spacecraft_name", "Spacecraft", 24),
+                ("orbit", "Orbit", 10), ("off_risk_date", "Off-risk", 12),
+                ("layer_signed_exposure", "Exposure", 15), ("reason", "Reason", 52)]
+        r = _hdr(ws, r, 2, [h for _, h, _ in cols], [w for _, _, w in cols])
+        for k, c in enumerate(mincs):
+            alt = k % 2 == 0
+            for j, (field, _, _) in enumerate(cols):
+                v = c.get(field)
+                if isinstance(v, (dt.date, dt.datetime)):
+                    v = str(v)
+                _cell(ws, r, 2 + j, v, alt=alt,
+                      money=(field == "layer_signed_exposure"))
             r += 1
         r += 1
 
@@ -2720,7 +2747,7 @@ def _s3123_ig_addons(wb, grid, params):
 
 def write_results(path, per_layer, sw, mr, grid, params, source,
                   recon=None, changes=None, excluded=None,
-                  corrections=None,
+                  corrections=None, manual_includes=None,
                   s3123_grid=None, s3123_recon=None, s3123_notes=None,
                   s3123_qoq=None):
     # FIX(recon 2026Q1, O2): the S3123 sheet is now written HERE when a grid is
@@ -2740,7 +2767,8 @@ def write_results(path, per_layer, sw, mr, grid, params, source,
     _waterfalls(wb, grid)
     _space_weather(wb, sw, colmap)
     _max_risk(wb, mr)
-    _python_adjustments(wb, per_layer, excluded, corrections, params)
+    _python_adjustments(wb, per_layer, excluded, corrections, params,
+                        manual_includes=manual_includes)
     _methodology(wb, params, changes)
     _audit(wb, per_layer, params, source, recon, excluded)
     _changes(wb, changes, per_layer)
