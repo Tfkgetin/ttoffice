@@ -277,11 +277,17 @@ data_corrections:
     established: "2026Q1"
     reason: "ASBM 1 (Norway) Elliptical orbit reclassified to GEO-GSO per methodology agreement; was filtered out of GEO scenarios"
  
-# reconciliation_notes for 2026Q1 (as-at 2026-04-01)
-# Documentary only — these explain intentional auto-vs-manual differences.
-# They change NO data; they render on the Python Adjustments tab so anyone
-# opening the book can see where (and why) auto diverges from the manual.
-reconciliation_notes: []   # Q1 notes retired: 36D now in system; D5 fixed in code
+# Documentary only — these explain intentional auto-vs-manual differences and
+# UW dispositions of apparent lapses. They change NO data; they render on the
+# Python Adjustments tab so anyone opening the book can see why a "lapsed" line
+# is actually fine (covered elsewhere / self-insured / renews next quarter).
+reconciliation_notes:
+  # UW disposition of 2026Q2 "No renewal pointer" lapses (Teams, 2026-07):
+  - {program_id: 341568, category: "Lapse — covered elsewhere", date_logged: "2026Q2", note: "WorldView Legion attaches to fleet policy 369418 (incepted Feb 2026) — covered, not a renewal. Exposure sits under 369418; the Book Movement 'lapsed' line for 341568 is display-only. VERIFY 369418 is in the current book (no double-count with a roll-forward)."}
+  - {program_id: 278759, category: "Lapse — genuine (self-insured)", date_logged: "2026Q2", note: "SXM-10 / Sirius XM do not buy in-orbit insurance — genuine non-renewal, no policy to renew. Correctly off the book; expected lapse each quarter (do not chase)."}
+  - {program_id: 277977, category: "Lapse — genuine (self-insured)", date_logged: "2026Q2", note: "SXM-10 (2nd programme) — Sirius XM self-insure in-orbit; genuine non-renewal."}
+  - {program_id: 328274, category: "Lapse — future renewal", date_logged: "2026Q2", note: "Spainsat NG-1 renews 2026-08-01 (after the 1-July as-at) — legitimately off the book for 2026Q2, returns in 2026Q3. Not a loss, a timing gap."}
+  - {program_id: 334082, category: "Lapse — future renewal", date_logged: "2026Q2", note: "Spainsat NG-1 (2nd programme) — renewal 2026-08-01; off-book for Q2, returns Q3."}
 
 # ---- Entities --------------------------------
 entities: ["FIHL", "FUL", "FIID", "FIBL"]
