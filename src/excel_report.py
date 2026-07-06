@@ -1662,12 +1662,15 @@ def _changes(wb, changes, per_layer=None):
 
 
 def _book_movement(wb, changes):
-    """Per-layer turnover, split the way underwriting reads it:
-      · New business — a spacecraft that was NOT in the prior book at all
-      · Renewals     — a spacecraft in BOTH books (old layer expired, new written);
-                       shown prior vs current exposure so the reprice is visible
-      · Lapsed       — a spacecraft that dropped with NO current layer (off the book)
-    The three are mutually exclusive and reconcile to the Changes summary."""
+    """Per-layer quarter-on-quarter turnover as a single, filterable table.
+    The Category column tells you how each layer moved:
+      · New business  — spacecraft not in the prior book at all
+      · Renewal (in)  — new layer; the spacecraft WAS in the prior book (rewrite)
+      · Renewal (out) — prior layer expired; the spacecraft is rewritten this qtr
+      · Replaced      — prior layer expired; spacecraft continues via another layer
+      · Lapsed        — prior layer expired; spacecraft now fully off the book
+    Exposure is signed (+ on-boarding, − leaving). AutoFilter + frozen header so
+    the reviewer can slice by category / entity / orbit."""
     if not changes or "layers" not in changes:
         return
     L = changes["layers"]
@@ -1678,85 +1681,83 @@ def _book_movement(wb, changes):
     def _sid(df):
         return df["spacecraft_id"].astype(str) if "spacecraft_id" in df.columns else pd.Series([], dtype=str)
     nsid, dsid = set(_sid(new)), set(_sid(dropped))
-    ren_sid = nsid & dsid
+    lapsed_df = L.get("renewal_gaps")
+    lapsed_scid = (set(lapsed_df["spacecraft_id"].astype(str))
+                   if (lapsed_df is not None and "spacecraft_id" in getattr(lapsed_df, "columns", []))
+                   else (dsid - nsid))
 
-    new_biz = new[~_sid(new).isin(dsid)].copy()                 # truly new spacecraft
-    ren_new = new[_sid(new).isin(ren_sid)].copy()               # renewal — current side
-    ren_old = dropped[_sid(dropped).isin(ren_sid)].copy()       # renewal — prior side
-    lapsed = L.get("renewal_gaps")
-    if lapsed is None:
-        lapsed = dropped[~_sid(dropped).isin(nsid)].copy()
+    def _num(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return 0.0
+
+    # one signed row per new/dropped layer, tagged with its movement category
+    rows = []   # (cat, entity, spacecraft, program, layer, orbit, signed_exp)
+    for _, row in new.iterrows():
+        cat = "Renewal (in)" if str(row.get("spacecraft_id")) in dsid else "New business"
+        rows.append((cat, str(row.get("entity", "")), str(row.get("spacecraft_name", "")),
+                     row.get("program_id"), row.get("layer_id"),
+                     str(row.get("orbit", "")), _num(row.get("per_sc"))))
+    for _, row in dropped.iterrows():
+        scid = str(row.get("spacecraft_id"))
+        cat = ("Renewal (out)" if scid in nsid
+               else "Lapsed" if scid in lapsed_scid else "Replaced")
+        rows.append((cat, str(row.get("entity", "")), str(row.get("spacecraft_name", "")),
+                     row.get("program_id"), row.get("layer_id"),
+                     str(row.get("orbit", "")), -_num(row.get("per_sc"))))
 
     ws = wb.create_sheet("Book Movement")
     _title(ws, "Book movement — new · renewals · lapsed",
-           f"per-spacecraft turnover vs {changes.get('prior_as_at', 'prior')}")
+           f"per-layer turnover vs {changes.get('prior_as_at', 'prior')} · "
+           "exposure signed (+ in / − out) · filter the table below")
 
-    def _sum(df):
-        return float(pd.to_numeric(df.get("per_sc"), errors="coerce").fillna(0).sum()) if len(df) else 0.0
-    nb_x, lap_x = _sum(new_biz), _sum(lapsed)
-    ren_cur, ren_pri = _sum(ren_new), _sum(ren_old)
+    def _tot(cats):
+        return sum(e for c, _, _, _, _, _, e in rows if c in cats)
+    nb_x, ren_in, ren_out = _tot({"New business"}), _tot({"Renewal (in)"}), _tot({"Renewal (out)"})
+    lap_x = _tot({"Lapsed"})
 
-    # headline strip
     r = _section(ws, 5, "At a glance")
     r = _kv(ws, r, "New business", nb_x, money=True)
-    ws.cell(row=r - 1, column=4, value=f"{new_biz['spacecraft_id'].nunique() if len(new_biz) else 0} spacecraft").font = F_SUB
-    r = _kv(ws, r, "Renewals — current exposure", ren_cur, money=True)
-    ws.cell(row=r - 1, column=4, value=f"{len(ren_sid)} spacecraft · was {ren_pri:,.0f} (Δ {ren_cur - ren_pri:+,.0f})").font = F_SUB
+    r = _kv(ws, r, "Renewals — new legs (in)", ren_in, money=True)
+    ws.cell(row=r - 1, column=4,
+            value=f"expiring legs {ren_out:,.0f} · net {ren_in + ren_out:+,.0f}").font = F_SUB
     r = _kv(ws, r, "Lapsed (off the book)", lap_x, money=True)
-    ws.cell(row=r - 1, column=4, value=f"{lapsed['spacecraft_id'].nunique() if len(lapsed) else 0} spacecraft").font = F_SUB
     r += 1
 
-    def _table(r, title, df, sort_col="per_sc"):
-        r = _section(ws, r, title)
-        r = _hdr(ws, r, 2, ["Spacecraft", "Entity", "Orbit", "Exposure"],
-                 [30, 10, 12, 16])
-        if not len(df):
-            _cell(ws, r, 2, "— none —"); return r + 2
-        for k, (_, row) in enumerate(df.sort_values(sort_col, ascending=False).iterrows()):
-            alt = k % 2 == 0
-            _cell(ws, r, 2, str(row.get("spacecraft_name", "")), alt=alt)
-            _cell(ws, r, 3, str(row.get("entity", "")), alt=alt)
-            _cell(ws, r, 4, str(row.get("orbit", "")), alt=alt)
-            _cell(ws, r, 5, row.get("per_sc"), alt=alt, money=True)
-            r += 1
-        return r + 1
-
-    r = _table(r, f"New business — {new_biz['spacecraft_id'].nunique() if len(new_biz) else 0} spacecraft "
-                  f"(${nb_x:,.0f})", new_biz)
-
-    # Renewals: pair prior vs current exposure per spacecraft
-    r = _section(ws, r, f"Renewals — {len(ren_sid)} spacecraft "
-                        f"(current ${ren_cur:,.0f} · Δ {ren_cur - ren_pri:+,.0f})")
-    r = _hdr(ws, r, 2, ["Spacecraft", "Entity", "Orbit", "Prior exp.",
-                        "Current exp.", "Δ exposure"], [30, 10, 12, 15, 15, 15])
-    if ren_sid:
-        cur_x = ren_new.groupby("spacecraft_id")["per_sc"].sum()
-        pri_x = ren_old.groupby("spacecraft_id")["per_sc"].sum()
-        meta = ren_new.groupby("spacecraft_id").agg(
-            {"spacecraft_name": "first", "entity": "first", "orbit": "first"})
-        order = (cur_x.reindex(meta.index).fillna(0)).sort_values(ascending=False).index
-        for k, sid in enumerate(order):
-            alt = k % 2 == 0
-            p = float(pri_x.get(sid, 0.0)); c = float(cur_x.get(sid, 0.0))
-            _cell(ws, r, 2, str(meta.loc[sid, "spacecraft_name"]), alt=alt)
-            _cell(ws, r, 3, str(meta.loc[sid, "entity"]), alt=alt)
-            _cell(ws, r, 4, str(meta.loc[sid, "orbit"]), alt=alt)
-            _cell(ws, r, 5, p, alt=alt, money=True)
-            _cell(ws, r, 6, c, alt=alt, money=True)
-            _cell(ws, r, 7, c - p, alt=alt, money=True, bold=abs(c - p) > 1e6)
-            r += 1
+    hdrs = ["Category", "Entity", "Spacecraft", "Program", "Layer", "Orbit", "Exposure"]
+    r = _section(ws, r, "All movements")
+    header_row = r
+    r = _hdr(ws, header_row, 2, hdrs, [15, 9, 28, 11, 8, 11, 16])
+    data_start = r
+    catrank = {"New business": 0, "Renewal (in)": 1, "Renewal (out)": 2,
+               "Replaced": 3, "Lapsed": 4}
+    rows.sort(key=lambda t: (catrank.get(t[0], 9), -abs(t[6])))
+    for k, (cat, ent, sc, prog, lay, orb, exp) in enumerate(rows):
+        alt = k % 2 == 0
+        _cell(ws, r, 2, cat, alt=alt)
+        _cell(ws, r, 3, ent, alt=alt)
+        _cell(ws, r, 4, sc, alt=alt)
+        _cell(ws, r, 5, prog, alt=alt)
+        _cell(ws, r, 6, lay, alt=alt)
+        _cell(ws, r, 7, orb, alt=alt)
+        _cell(ws, r, 8, exp, alt=alt, money=True, bold=abs(exp) > 1e7)
+        r += 1
+    last = r - 1
+    if rows:
+        ws.auto_filter.ref = f"B{header_row}:H{last}"   # the filter buttons
+        ws.freeze_panes = f"B{data_start}"              # keep header while scrolling
     else:
-        _cell(ws, r, 2, "— none —"); r += 1
-    r += 1
+        _cell(ws, r, 2, "— no movement vs prior —"); r += 1
 
-    r = _table(r, f"Lapsed — {lapsed['spacecraft_id'].nunique() if len(lapsed) else 0} spacecraft off the book "
-                  f"(${lap_x:,.0f})", lapsed)
-    c = ws.cell(row=r, column=2, value="Lapsed = expired with no current layer. "
-                "Verify these are true non-renewals, not renewals not yet bound/entered.")
-    c.font = Font(name=_FB, size=9, italic=True, color=SOFT)
-    ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=7)
+    note = ws.cell(row=r + 1, column=2,
+                   value="Lapsed = expired with no current layer — verify these are "
+                   "true non-renewals, not renewals not yet bound/entered. "
+                   "Replaced = spacecraft continues via another layer.")
+    note.font = Font(name=_FB, size=9, italic=True, color=SOFT)
+    ws.merge_cells(start_row=r + 1, start_column=2, end_row=r + 1, end_column=8)
 
-    for col, w in {"B": 30, "C": 10, "D": 12, "E": 15, "F": 15, "G": 15}.items():
+    for col, w in {"B": 15, "C": 9, "D": 28, "E": 11, "F": 8, "G": 11, "H": 16}.items():
         ws.column_dimensions[col].width = w
 
 
@@ -2271,24 +2272,29 @@ def _python_adjustments(wb, per_layer, excluded, corrections=None, params=None,
     # source. They flow through the whole engine; documented here for audit.
     mincs = manual_includes or []
     if mincs:
+        n_inj = sum(1 for c in mincs if c.get("status") == "INCLUDED")
         mi_exp = sum(float(c.get("layer_signed_exposure") or c.get("per_sc") or 0)
-                     for c in mincs)
-        r = _section(ws, r, f"Manual inclusions ({len(mincs)} · "
+                     for c in mincs if c.get("status") == "INCLUDED")
+        r = _section(ws, r, f"Manual inclusions ({n_inj} injected · "
                             f"${mi_exp:,.0f}) — UW-confirmed layers injected at "
                             "ingest (renewal not yet bound in source)")
         cols = [("program_id", "Program", 11), ("layer_id", "Layer", 8),
                 ("entity", "Entity", 9), ("spacecraft_name", "Spacecraft", 24),
                 ("orbit", "Orbit", 10), ("off_risk_date", "Off-risk", 12),
-                ("layer_signed_exposure", "Exposure", 15), ("reason", "Reason", 52)]
+                ("layer_signed_exposure", "Exposure", 15),
+                ("status", "Status", 20), ("reason", "Reason", 48)]
         r = _hdr(ws, r, 2, [h for _, h, _ in cols], [w for _, _, w in cols])
         for k, c in enumerate(mincs):
             alt = k % 2 == 0
+            skipped = str(c.get("status", "")).startswith("SKIPPED")
             for j, (field, _, _) in enumerate(cols):
                 v = c.get(field)
                 if isinstance(v, (dt.date, dt.datetime)):
                     v = str(v)
-                _cell(ws, r, 2 + j, v, alt=alt,
-                      money=(field == "layer_signed_exposure"))
+                cell = _cell(ws, r, 2 + j, v, alt=alt,
+                             money=(field == "layer_signed_exposure"))
+                if field == "status" and skipped:
+                    cell.font = F_FLAG   # safeguard tripped — not injected
             r += 1
         r += 1
 

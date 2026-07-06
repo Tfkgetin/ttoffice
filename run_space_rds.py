@@ -84,10 +84,16 @@ def main():
     df = ingest.load(p)
     print(f"      {len(df)} rows · {df['layer_key'].nunique()} layers")
     mi = getattr(ingest.load, "last_manual_includes", None) or []
-    if mi:
-        mx = sum(float(c.get("layer_signed_exposure") or c.get("per_sc") or 0) for c in mi)
-        print(f"      + {len(mi)} manual inclusion(s) (${mx:,.0f}) injected — "
+    inc_ok = [c for c in mi if c.get("status") == "INCLUDED"]
+    skipped = [c for c in mi if str(c.get("status", "")).startswith("SKIPPED")]
+    if inc_ok:
+        mx = sum(float(c.get("layer_signed_exposure") or c.get("per_sc") or 0)
+                 for c in inc_ok)
+        print(f"      + {len(inc_ok)} manual inclusion(s) (${mx:,.0f}) injected — "
               f"see Python Adjustments tab")
+    if skipped:
+        print(f"      · {len(skipped)} manual inclusion(s) skipped — renewal now "
+              f"in source (double-count safeguard)")
 
     print("[2/7] Engine…")
     df = engine.run_engine(df, p)
