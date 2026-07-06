@@ -427,18 +427,79 @@ def attach_lloyds_bus_type(df: pd.DataFrame, params) -> pd.DataFrame:
     return df
 
 
-def _apply_manual_includes(df, params):
+def _rollforward_dicts(prior, rules):
+    """Turn `renewal_rollforward` rules into manual_include dicts by cloning the
+    prior book's layers for each `from_program` into `to_program` at the renewal
+    dates, carrying the per-bird spacecraft / manufacturer / orbit / exposure so
+    the fleet's scenario granularity is preserved. Pure; returns a list."""
+    out = []
+    for rule in rules or []:
+        fp = str(rule["from_program"])
+        tp = rule["to_program"]
+        sub = prior[prior["program_id"].astype(str) == fp]
+        for _, r in sub.iterrows():
+            scid = r.get("spacecraft_id")
+            scid = int(scid) if pd.notna(scid) else None
+            out.append({
+                "program_id": tp,
+                "layer_id": int(r["layer_id"]),
+                "spacecraft_id": scid,
+                "spacecraft_name": r.get("spacecraft_name"),
+                "entity": r.get("entity"),
+                "mapping_code": r.get("mapping_code") or rule.get("mapping_code", "ASO"),
+                "orbit": r.get("orbit"),
+                "bus_manufacturer": r.get("bus_manufacturer"),
+                "is_consortium": bool(r.get("is_consortium", False)),
+                "inception": rule["inception"],
+                "on_risk_date": rule.get("on_risk_date", rule["inception"]),
+                "off_risk_date": rule["off_risk_date"],
+                "layer_signed_exposure": float(r["per_sc"]),
+                "renewed_from_program_id": rule["from_program"],
+                "renewal_uw_status": rule.get("renewal_uw_status", ""),
+                "renewal_snapshot": rule.get("renewal_snapshot", ""),
+                "reason": rule.get("reason",
+                                   f"Renewal roll-forward {fp} → {tp} (prior line)"),
+            })
+    return out
+
+
+def _rollforward_includes(params):
+    """Build manual_include dicts for any `renewal_rollforward` rules by reading
+    the frozen prior workbook. Returns [] (never raises) if there are no rules or
+    the prior book is unavailable — the run then just carries the hand entries."""
+    rules = params.raw.get("renewal_rollforward") or []
+    if not rules:
+        return []
+    prior_path = params.raw.get("prior_workbook")
+    if not prior_path:
+        print("      renewal roll-forward: skipped (no prior_workbook configured)")
+        return []
+    try:
+        from . import prior_seed
+        prior = prior_seed.load_prior_workbook(prior_path)
+    except Exception as e:  # noqa: BLE001
+        print(f"      renewal roll-forward: skipped (prior load failed: {e})")
+        return []
+    gen = _rollforward_dicts(prior, rules)
+    if gen:
+        gx = sum(g["layer_signed_exposure"] for g in gen)
+        print(f"      renewal roll-forward: {len(gen)} layer(s) (${gx:,.0f}) "
+              f"generated from prior book")
+    return gen
+
+
+def _apply_manual_includes(df, params, extra=None):
     """Inject UW-confirmed manual layers (e.g. renewals not yet bound in the
     source as-at the run date) so they flow through the ENTIRE engine — rpf,
     cessions, scenarios, netting, summary, Max Risk. Each config entry supplies
     the raw layer inputs; the engine recomputes everything derived. Rows are
     tagged manual_include=True and logged to load.last_manual_includes for the
-    Python Adjustments tab. Each entry:
+    Python Adjustments tab. `extra` carries roll-forward-generated dicts. Each entry:
         {program_id, layer_id, spacecraft_id, spacecraft_name, entity,
          mapping_code, orbit, bus_manufacturer, is_consortium, inception,
          on_risk_date, off_risk_date, layer_signed_exposure, reason}
     """
-    incs = params.raw.get("manual_include") or []
+    incs = (params.raw.get("manual_include") or []) + list(extra or [])
     load.last_manual_includes = []
     df = df.copy()
     if "manual_include" not in df.columns:
@@ -448,6 +509,7 @@ def _apply_manual_includes(df, params):
     DATE_FIELDS = ("off_risk_date", "on_risk_date", "inception", "expiry",
                    "launch_date")
     existing_keys = set(df["layer_key"].astype(str)) if "layer_key" in df.columns else set()
+    added_keys = set()   # intra-list dedup (a hand entry + a roll-forward for the same layer)
     rows, logged = [], []
     for it in incs:
         # SAFEGUARD against double-counting: once the source binds the renewal,
@@ -458,7 +520,9 @@ def _apply_manual_includes(df, params):
         scid = str(it.get("spacecraft_id"))
         inc_date = _to_date(it.get("inception"))
         skip = None
-        if lk in existing_keys:
+        if lk in added_keys:
+            skip = "duplicate manual entry (same layer_key already injected)"
+        elif lk in existing_keys:
             skip = "already in source feed (same layer_key)"
         elif (scid and inc_date is not None and "spacecraft_id" in df.columns
               and "inception" in df.columns):
@@ -487,6 +551,7 @@ def _apply_manual_includes(df, params):
             row["on_risk_date"] = row["inception"]
         row["manual_include"] = True
         rows.append(row)
+        added_keys.add(lk)
         logged.append({**it, "status": "INCLUDED"})
     add = pd.DataFrame(rows).reindex(columns=df.columns)
     out = pd.concat([df, add], ignore_index=True)
@@ -511,7 +576,8 @@ def load(params) -> pd.DataFrame:
     else:
         raise ValueError(f"Unknown source {ing['source']}")
     df = _apply_corrections(df, params)
-    df = _apply_manual_includes(df, params)
+    extra = _rollforward_includes(params)
+    df = _apply_manual_includes(df, params, extra=extra)
     if (params.raw.get("s3123_rds") or {}).get("enabled"):
         df = attach_lloyds_bus_type(df, params)
     return df

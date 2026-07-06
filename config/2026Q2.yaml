@@ -34,11 +34,16 @@ prior_as_at_label: "2026-04-01 (2026Q1 auto book)"
 #   derived from config). renewed_from_program_id / renewal_uw_status /
 #   renewal_snapshot are documentary (shown on Python Adjustments); the
 #   spacecraft-level double-count safeguard retires each entry once 385575 binds.
+# NOTE: the Eutelsat fleet renewal (344558 → 385575) is now carried by the
+# renewal_rollforward rule below (UW-confirmed whole-fleet renewal). It clones ALL
+# 23 prior Eutelsat birds — not just the 4 hand entries kept here for reference —
+# so the full fleet flows into the book at the Q1 line size. The 4 entries are
+# disabled to avoid double-counting; delete them once the roll-forward is trusted.
 manual_include:
-  - {program_id: 385575, layer_id: 1,  spacecraft_id: 16310, spacecraft_name: "EUTELSAT 36D", entity: FIID, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Airbus Defence and Space",             is_consortium: false, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 19814782.42, renewed_from_program_id: 344558, renewal_uw_status: "Quoted/Awaiting FOT", renewal_snapshot: "2026-07-05", reason: "Eutelsat 36D renewal (prog 385575, renews-from 344558) — UW-confirmed manual inclusion; source renewal Quoted/Awaiting FOT, not yet bound as-at 2026-07-01"}
-  - {program_id: 385575, layer_id: 20, spacecraft_id: 13009, spacecraft_name: "E13G",         entity: FIID, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Airbus Defence and Space (Toulouse)",  is_consortium: false, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 19814782.42, renewed_from_program_id: 344558, renewal_uw_status: "Quoted/Awaiting FOT", renewal_snapshot: "2026-07-05", reason: "Eutelsat E13G renewal (prog 385575, renews-from 344558) — UW-confirmed manual inclusion"}
-  - {program_id: 385575, layer_id: 22, spacecraft_id: 14159, spacecraft_name: "E10B",         entity: FIID, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Thales Alenia Space France (Cannes)", is_consortium: false, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 19814782.42, renewed_from_program_id: 344558, renewal_uw_status: "Quoted/Awaiting FOT", renewal_snapshot: "2026-07-05", reason: "Eutelsat E10B renewal (prog 385575, renews-from 344558) — UW-confirmed manual inclusion"}
-  - {program_id: 385575, layer_id: 23, spacecraft_id: 13008, spacecraft_name: "E13F",         entity: FIID, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Airbus Defence and Space (Toulouse)",  is_consortium: false, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 19814782.42, renewed_from_program_id: 344558, renewal_uw_status: "Quoted/Awaiting FOT", renewal_snapshot: "2026-07-05", reason: "Eutelsat E13F renewal (prog 385575, renews-from 344558) — UW-confirmed manual inclusion"}
+  # - {program_id: 385575, layer_id: 1,  spacecraft_id: 16310, spacecraft_name: "EUTELSAT 36D", entity: FIID, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Airbus Defence and Space",             is_consortium: false, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 19814782.42, renewed_from_program_id: 344558, renewal_uw_status: "Quoted/Awaiting FOT", renewal_snapshot: "2026-07-05", reason: "Eutelsat 36D renewal — superseded by renewal_rollforward"}
+  # - {program_id: 385575, layer_id: 20, spacecraft_id: 13009, spacecraft_name: "E13G",         entity: FIID, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Airbus Defence and Space (Toulouse)",  is_consortium: false, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 19814782.42, renewed_from_program_id: 344558, renewal_uw_status: "Quoted/Awaiting FOT", renewal_snapshot: "2026-07-05", reason: "Eutelsat E13G renewal — superseded by renewal_rollforward"}
+  # - {program_id: 385575, layer_id: 22, spacecraft_id: 14159, spacecraft_name: "E10B",         entity: FIID, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Thales Alenia Space France (Cannes)", is_consortium: false, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 19814782.42, renewed_from_program_id: 344558, renewal_uw_status: "Quoted/Awaiting FOT", renewal_snapshot: "2026-07-05", reason: "Eutelsat E10B renewal — superseded by renewal_rollforward"}
+  # - {program_id: 385575, layer_id: 23, spacecraft_id: 13008, spacecraft_name: "E13F",         entity: FIID, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Airbus Defence and Space (Toulouse)",  is_consortium: false, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 19814782.42, renewed_from_program_id: 344558, renewal_uw_status: "Quoted/Awaiting FOT", renewal_snapshot: "2026-07-05", reason: "Eutelsat E13F renewal — superseded by renewal_rollforward"}
   # Turksat 6A renewal — flagged "Bound — missing from source" by the renewal
   # check: prog 377766 (renews-from 341429) is Consortium / IsBound=1 / ASO /
   # on-risk 2026-04-10→2027-04-09, yet absent from the auto-extract (suspect: no
@@ -49,6 +54,29 @@ manual_include:
   # then multiply by the MGU cession from param_consortium_splits (or reuse the
   # Q1 book's carried line for 341429). is_consortium below needs the same review.
   # - {program_id: 377766, layer_id: 526328, spacecraft_id: 9785, spacecraft_name: "Turksat 6A", entity: FUL, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Airbus Defence and Space", is_consortium: false, inception: "2026-04-10", on_risk_date: "2026-04-10", off_risk_date: "2027-04-09", layer_signed_exposure: 0.0, renewed_from_program_id: 341429, renewal_uw_status: "Bound (Signed Off)", renewal_snapshot: "2026-07-05", reason: "Turksat 6A renewal (prog 377766, renews-from 341429) — bound & on-risk but missing from auto-extract; manual inclusion pending exposure/cession confirmation"}
+
+# ---- Renewal roll-forward --------------------------------------------------
+# For a UW-CONFIRMED whole-programme renewal whose successor isn't yet in source
+# (not bound / not entered), clone EVERY prior-book layer of `from_program` into
+# `to_program` at the renewal dates — carrying each bird's spacecraft, entity,
+# orbit, manufacturer and Q1 exposure so scenario granularity (Space Weather by
+# manufacturer, Max Risk single-sat) is preserved. Generated layers are injected
+# exactly like manual_include (whole engine) and shown on Python Adjustments; the
+# spacecraft-level double-count safeguard retires each once the source binds it.
+# Eutelsat: J.Pbi confirms programme 344558 renews to 385575 (Quoted/Awaiting
+# FOT); UW confirmed the whole-fleet renewal. The source models 344558 as 2 fleet
+# lines, but the Q1 manual book disaggregates it into 23 per-spacecraft rows — the
+# roll-forward carries all 23 forward.
+renewal_rollforward:
+  - from_program: 344558
+    to_program: 385575
+    inception: "2026-07-01"
+    on_risk_date: "2026-07-01"
+    off_risk_date: "2027-06-30"
+    mapping_code: ASO
+    renewal_uw_status: "Quoted/Awaiting FOT"
+    renewal_snapshot: "2026-07-05"
+    reason: "Eutelsat fleet renewal 344558 → 385575 — UW-confirmed whole-fleet renewal; carried at Q1 line size, source renewal not yet bound"
 
 # ---- Time decay (Risk Period Factor) -------- Input Data O10:P14
 # Banded on full months between as-at date and Off_Risk_Date (largest band <= months)
