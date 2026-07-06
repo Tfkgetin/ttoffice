@@ -85,6 +85,20 @@ renewal_rollforward:
   # - {from_program: 344664, to_program: 382904, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", mapping_code: ASO, renewal_uw_status: "NBI", renewal_snapshot: "2026-07-05", reason: "Arabsat fleet renewal 344664 → 382904 — pending UW sign-off; unbound (NBI), carried at Q1 line size"}
   # - {from_program: 343724, to_program: 385466, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", mapping_code: ASO, renewal_uw_status: "Quoted/Awaiting FOT", renewal_snapshot: "2026-07-05", reason: "Inmarsat GX fleet renewal 343724 → 385466 — pending UW sign-off; unbound (Quoted), carried at Q1 line size"}
 
+# ---- Renewal overrides -----------------------------------------------------
+# UW-confirmed old→new programme links the J.Pbi 'Renewed To' pointer doesn't
+# carry (e.g. a fleet that re-attaches under a new programme with different ids).
+# CLASSIFICATION ONLY — reclassifies Book Movement, never injects exposure. If
+# the 'to_program' is already in the current book, the expiring layer moves to
+# the 'Renewed — covered in the book' table (out of Lapsed); if not, it reads as
+# a renewal in progress. Use renewal_rollforward (not this) to actually CARRY a
+# renewal that isn't in source.
+renewal_overrides:
+  # WorldView / Maxar Legion Fleet 341568 (expired 2026-05-02) → Legion
+  # Satellites In-Orbit Fleet 369418 (bound, in the book, ~$90m signed). Covered
+  # there; this stops 341568 reading as a ~$32m lapse.
+  - {from_program: 341568, to_program: 369418, status: "Bound (Signed Off)", note: "WorldView Legion re-attaches to in-orbit fleet 369418 (already in book)"}
+
 # ---- Time decay (Risk Period Factor) -------- Input Data O10:P14
 # Banded on full months between as-at date and Off_Risk_Date (largest band <= months)
 rpf_bands:

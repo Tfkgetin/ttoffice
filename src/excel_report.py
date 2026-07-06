@@ -1826,15 +1826,22 @@ def _book_movement(wb, changes):
 
     # An expired layer that carries a renewal pointer is NOT a plain lapse — split
     # the lapsed set by the pointer's verdict:
+    #   covered — renewal is BOUND and already IN the current book (a different
+    #             programme id, e.g. WorldView 341568 → 369418): counted there,
+    #             so it must leave the Lapsed table
     #   pending — renewal in progress / bound-but-missing → renewing, not yet in
     #             the book (can't pair in Renewals, but shown separately)
     #   gone    — NTU/Declined or no pointer → genuinely off the book
+    _COVERED = ("bound_captured",)
     _PENDING = ("in_progress", "bound_missing")
     if lapsed is not None and len(lapsed) and "renewal_state" in lapsed.columns:
+        covered = lapsed[lapsed["renewal_state"].isin(_COVERED)].copy()
         pending = lapsed[lapsed["renewal_state"].isin(_PENDING)].copy()
-        gone = lapsed[~lapsed["renewal_state"].isin(_PENDING)].copy()
+        gone = lapsed[~lapsed["renewal_state"].isin(_COVERED + _PENDING)].copy()
     else:
-        pending = lapsed.iloc[0:0].copy() if lapsed is not None else pd.DataFrame()
+        empty = lapsed.iloc[0:0].copy() if lapsed is not None else pd.DataFrame()
+        covered = empty.copy()
+        pending = empty.copy()
         gone = lapsed
 
     def _num(v):
@@ -1846,7 +1853,7 @@ def _book_movement(wb, changes):
     def _sum(df):
         return float(pd.to_numeric(df.get("per_sc"), errors="coerce").fillna(0).sum()) if len(df) else 0.0
     nb_x = _sum(new_biz)
-    pend_x, gone_x = _sum(pending), _sum(gone)
+    pend_x, gone_x, cov_x = _sum(pending), _sum(gone), _sum(covered)
     ren_cur, ren_pri = _sum(ren_new), _sum(ren_old)
 
     ws = wb.create_sheet("Book Movement")
@@ -1863,6 +1870,9 @@ def _book_movement(wb, changes):
     ws.cell(row=r - 1, column=4, value=f"{len(ren_sid)} spacecraft · was {ren_pri:,.0f} (Δ {ren_cur - ren_pri:+,.0f})").font = F_SUB
     r = _kv(ws, r, "Renewals in progress (not yet in book)", pend_x, money=True)
     ws.cell(row=r - 1, column=4, value=f"{_nsc(pending)} spacecraft · renewal pending — see table below").font = F_SUB
+    if len(covered):
+        r = _kv(ws, r, "Renewed — covered in the book (other prog)", cov_x, money=True)
+        ws.cell(row=r - 1, column=4, value=f"{_nsc(covered)} spacecraft · counted under the renewal programme, not a loss").font = F_SUB
     r = _kv(ws, r, "Lapsed (not renewed / off the book)", gone_x, money=True)
     ws.cell(row=r - 1, column=4, value=f"{_nsc(gone)} spacecraft").font = F_SUB
     r += 1
@@ -1980,6 +1990,25 @@ def _book_movement(wb, changes):
             "lost. Candidates for roll-forward / manual inclusion if UW confirms."))
         pn.font = Font(name=_FB, size=9, italic=True, color=SOFT)
         pn.alignment = Alignment(wrap_text=True, vertical="top")
+        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=11)
+        ws.row_dimensions[r].height = 28
+        r += 2
+
+    # Renewed — covered in the current book under a different programme id (the
+    # renewal is BOUND and present, e.g. WorldView 341568 → 369418). Pulled OUT
+    # of Lapsed: not a loss, the exposure is counted under the renewal programme.
+    if len(covered):
+        r = _simple_table(r, f"Renewed — covered in the book — {_nsc(covered)} "
+                             f"spacecraft under a renewal programme (${cov_x:,.0f})",
+                          covered, GREEN, "BM_Covered", show_renewal=True)
+        cn = ws.cell(row=r, column=2, value=(
+            "Expired, but the renewal is BOUND and already in the current book "
+            "under the programme in 'Renewed to' — the exposure is counted there, "
+            "so these are NOT a loss and are not in Lapsed. 'Program' is the "
+            "expiring id. (Set via renewal_overrides where the J.Pbi pointer is "
+            "absent — e.g. WorldView Legion 341568 → 369418.)"))
+        cn.font = Font(name=_FB, size=9, italic=True, color=SOFT)
+        cn.alignment = Alignment(wrap_text=True, vertical="top")
         ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=11)
         ws.row_dimensions[r].height = 28
         r += 2
