@@ -156,19 +156,21 @@ def load_watch(params):
 
 def attach_watch(frame, watch, current_pids):
     """Merge renewal pointers from `watch` onto a frame of expiring/dropped
-    layers (by layer_key) and classify. Returns the frame unchanged if either
-    input is missing or the frame has no layer_key — safe to call always."""
+    layers and classify. The join key is recomputed from program_id/layer_id on
+    BOTH sides (never the frame's own `layer_key`, whose separator differs by
+    source — prior-workbook frames use 'program|layer', ingest uses
+    'program_layer'). Returns the frame unchanged if it lacks the ids — safe to
+    call always."""
     if frame is None or not len(frame) or watch is None or not len(watch):
         return frame
+    if not ({"program_id", "layer_id"} <= set(frame.columns)):
+        return frame
     f = frame.copy()
-    if "layer_key" not in f.columns:
-        if {"program_id", "layer_id"} <= set(f.columns):
-            f["layer_key"] = [_layer_key(p, l)
-                              for p, l in zip(f["program_id"], f["layer_id"])]
-        else:
-            return frame
-    cols = ["layer_key", "renewed_to_program_id", "renewed_to_status"]
-    cols = [c for c in cols if c in watch.columns]
-    f = f.merge(watch[cols].drop_duplicates("layer_key"), on="layer_key",
-                how="left", suffixes=("", "_w"))
+    f["_rk"] = [_layer_key(p, l) for p, l in zip(f["program_id"], f["layer_id"])]
+    w = watch.copy()
+    w["_rk"] = [_layer_key(p, l) for p, l in zip(w["program_id"], w["layer_id"])]
+    cols = ["_rk", "renewed_to_program_id", "renewed_to_status"]
+    cols = [c for c in cols if c in w.columns]
+    f = f.merge(w[cols].drop_duplicates("_rk"), on="_rk", how="left",
+                suffixes=("", "_w")).drop(columns=["_rk"])
     return annotate(f, current_pids)
