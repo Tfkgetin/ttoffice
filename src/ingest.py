@@ -110,6 +110,12 @@ _SQL_TARGETS = {
     "isconsortium": "is_consortium",
     "action": "override_action",   # 'Add Layer' / 'Remove Layer' from manual table
     "placingbasis": "placing_basis",
+    # Renewal pointers from the PBI layer snapshot (J.Pbi.Layers_t) — feed the
+    # renewal-policy check. Absent in workbook/CSV runs; optional everywhere.
+    "renewedtoprogramid": "renewed_to_program_id",
+    "renewedfromprogramid": "renewed_from_program_id",
+    "renewedtouwstatus": "renewed_to_status",
+    "renewedtoinception": "renewed_to_inception",
     # View's own computed columns — captured as sql_* for engine-vs-view QA
     "qsigr": "sql_igr_qs_rate",
     "monthsleftonrisk": "sql_months_left",
@@ -184,9 +190,17 @@ def load_from_sql(sql_cfg: dict, non_consortium: set | None = None) -> pd.DataFr
             f"SQL view missing required fields: {sorted(missing)}. "
             f"View columns were: {list(raw.columns)}")
 
-    for col in ["launch_date", "inception", "expiry", "on_risk_date", "off_risk_date"]:
+    for col in ["launch_date", "inception", "expiry", "on_risk_date",
+                "off_risk_date", "renewed_to_inception"]:
         if col in df.columns:
             df[col] = df[col].map(_to_date)
+
+    # Renewal pointers: sentinel 0 → NA (SQL NULLIFs, but be defensive for other
+    # sources), ids kept nullable-Int so a missing pointer isn't a spurious 0.
+    for col in ["renewed_to_program_id", "renewed_from_program_id"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").replace(0, pd.NA)
+            df[col] = df[col].astype("Int64")
 
     # Consortium flag: from the view if present, else config exceptions list
     if "is_consortium" in df.columns:

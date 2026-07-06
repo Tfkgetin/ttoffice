@@ -23,15 +23,22 @@ prior_as_at_label: "2026-04-01 (2026Q1 auto book)"
 # Summary → Max Risk → Changes). The engine recomputes rpf / cessions /
 # scenario losses from the raw inputs below. Remove an entry once the source
 # picks the renewal up (else it double-counts).
-#   Eutelsat renewals (program 344558) — expired 2026-06-30, UW (JJ 2026-07-06)
-#   confirmed they renew and need manual inclusion; carried at the Q1 line size,
-#   re-dated to the 2026-07-01 → 2027-06-30 period. is_consortium=false matches
-#   the Q1 treatment (no S3123 QS / equity; IGR QS derived from config).
+#   Eutelsat renewals — keyed to program 385575, the ACTUAL 1-July renewal
+#   (J.Pbi.Layers_t snapshot 2026-07-05: program 385575 incepts 2026-07-01,
+#   Renewed From 344558, UW status "Quoted/Awaiting FOT" — i.e. NOT yet bound,
+#   so absent from the IsBound=1 source). The expiring program 344558 went
+#   off-risk 2026-06-30. We previously keyed this inclusion to 344558 (the
+#   expiring id); re-pointed to 385575 to match source truth. Carried at the Q1
+#   line size, dated to the 2026-07-01 → 2027-06-30 renewal period.
+#   is_consortium=false matches the Q1 treatment (no S3123 QS / equity; IGR QS
+#   derived from config). renewed_from_program_id / renewal_uw_status /
+#   renewal_snapshot are documentary (shown on Python Adjustments); the
+#   spacecraft-level double-count safeguard retires each entry once 385575 binds.
 manual_include:
-  - {program_id: 344558, layer_id: 1,  spacecraft_id: 16310, spacecraft_name: "EUTELSAT 36D", entity: FIID, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Airbus Defence and Space",             is_consortium: false, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 19814782.42, reason: "Eutelsat 36D renewal — UW-confirmed manual inclusion (source renewal not yet bound as-at 2026-07-01)"}
-  - {program_id: 344558, layer_id: 20, spacecraft_id: 13009, spacecraft_name: "E13G",         entity: FIID, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Airbus Defence and Space (Toulouse)",  is_consortium: false, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 19814782.42, reason: "Eutelsat E13G renewal — UW-confirmed manual inclusion"}
-  - {program_id: 344558, layer_id: 22, spacecraft_id: 14159, spacecraft_name: "E10B",         entity: FIID, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Thales Alenia Space France (Cannes)", is_consortium: false, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 19814782.42, reason: "Eutelsat E10B renewal — UW-confirmed manual inclusion"}
-  - {program_id: 344558, layer_id: 23, spacecraft_id: 13008, spacecraft_name: "E13F",         entity: FIID, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Airbus Defence and Space (Toulouse)",  is_consortium: false, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 19814782.42, reason: "Eutelsat E13F renewal — UW-confirmed manual inclusion"}
+  - {program_id: 385575, layer_id: 1,  spacecraft_id: 16310, spacecraft_name: "EUTELSAT 36D", entity: FIID, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Airbus Defence and Space",             is_consortium: false, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 19814782.42, renewed_from_program_id: 344558, renewal_uw_status: "Quoted/Awaiting FOT", renewal_snapshot: "2026-07-05", reason: "Eutelsat 36D renewal (prog 385575, renews-from 344558) — UW-confirmed manual inclusion; source renewal Quoted/Awaiting FOT, not yet bound as-at 2026-07-01"}
+  - {program_id: 385575, layer_id: 20, spacecraft_id: 13009, spacecraft_name: "E13G",         entity: FIID, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Airbus Defence and Space (Toulouse)",  is_consortium: false, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 19814782.42, renewed_from_program_id: 344558, renewal_uw_status: "Quoted/Awaiting FOT", renewal_snapshot: "2026-07-05", reason: "Eutelsat E13G renewal (prog 385575, renews-from 344558) — UW-confirmed manual inclusion"}
+  - {program_id: 385575, layer_id: 22, spacecraft_id: 14159, spacecraft_name: "E10B",         entity: FIID, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Thales Alenia Space France (Cannes)", is_consortium: false, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 19814782.42, renewed_from_program_id: 344558, renewal_uw_status: "Quoted/Awaiting FOT", renewal_snapshot: "2026-07-05", reason: "Eutelsat E10B renewal (prog 385575, renews-from 344558) — UW-confirmed manual inclusion"}
+  - {program_id: 385575, layer_id: 23, spacecraft_id: 13008, spacecraft_name: "E13F",         entity: FIID, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Airbus Defence and Space (Toulouse)",  is_consortium: false, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 19814782.42, renewed_from_program_id: 344558, renewal_uw_status: "Quoted/Awaiting FOT", renewal_snapshot: "2026-07-05", reason: "Eutelsat E13F renewal (prog 385575, renews-from 344558) — UW-confirmed manual inclusion"}
 
 # ---- Time decay (Risk Period Factor) -------- Input Data O10:P14
 # Banded on full months between as-at date and Off_Risk_Date (largest band <= months)
@@ -241,6 +248,11 @@ ingest:
     server: LON-SQLP-V005
     database: SpaceTrax_Data
     query_file: sql/space_rds_onrisk_asat.sql
+    # Renewal-policy check: forward renewal pointers from the PBI layer snapshot
+    # (J.Pbi.Layers_t), used to classify the quarter's lapsed layers as
+    # renewed-bound / in-progress / NTU-Declined / no-pointer. Optional — remove
+    # to fall back to the spacecraft heuristic. Runs on the same connection.
+    renewal_watch_query_file: sql/renewal_watch.sql
 
 # ---- Pipeline-side population exclusions ----
 # Drop layers whose Placing_Basis matches (case-insensitive). The SQL view only
