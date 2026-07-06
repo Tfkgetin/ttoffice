@@ -194,6 +194,22 @@ def _dcell(ws, r, c, val, alt=False):
     return cell
 
 
+def _progid(v):
+    """Render a programme id as a plain integer; NA/blank → ''."""
+    if v is None:
+        return ""
+    try:
+        if pd.isna(v):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        s = str(v).strip()
+        return "" if s.lower() in ("nan", "<na>", "none") else s
+
+
 def _add_table(ws, name, first_col, header_row, last_col, last_row):
     """Wrap a rendered block in an Excel Table so it carries its own filter
     dropdowns. Excel allows only ONE classic AutoFilter per sheet but many
@@ -1817,10 +1833,14 @@ def _book_movement(wb, changes):
     def _simple_table(r, title, df, exp_colour, tbl_name, show_renewal=False):
         # Lapsed carries a Renewal-status column when the renewal-policy check has
         # classified it (from the J.Pbi forward pointer); otherwise it's absent.
+        # It also names the successor programme id (the renewal changes programme
+        # id) so a "Bound — missing from source" row is actionable.
         renewal = show_renewal and df is not None and "renewal_label" in getattr(df, "columns", [])
-        heads = IDCOLS + ["Exposure"] + (["Renewal status"] if renewal else [])
-        widths = IDW + [16] + ([34] if renewal else [])
-        last_col = 10 if renewal else 9
+        has_to = renewal and "renewed_to_program_id" in getattr(df, "columns", [])
+        heads = IDCOLS + ["Exposure"] + (["Renewal status"] if renewal else []) \
+            + (["Renewed to (prog)"] if has_to else [])
+        widths = IDW + [16] + ([34] if renewal else []) + ([15] if has_to else [])
+        last_col = 9 + (1 if renewal else 0) + (1 if has_to else 0)
         r = _section(ws, r, title)
         header_row = r
         r = _hdr(ws, header_row, 2, heads, widths, white=True)
@@ -1838,6 +1858,8 @@ def _book_movement(wb, changes):
                 rc = _cell(ws, r, 10, str(row.get("renewal_label", "")), alt=alt)
                 rc.font = Font(name=_FB, size=10, color=sev,
                                bold=str(row.get("renewal_severity", "")) in ("gap", "progress"))
+            if has_to:
+                _cell(ws, r, 11, _progid(row.get("renewed_to_program_id")), alt=alt)
             r += 1
         _add_table(ws, tbl_name, 2, header_row, last_col, r - 1)
         return r + 1
@@ -1849,8 +1871,12 @@ def _book_movement(wb, changes):
     r = _section(ws, r, f"Renewals — {len(ren_sid)} spacecraft "
                         f"(current ${ren_cur:,.0f} · Δ {ren_cur - ren_pri:+,.0f})")
     ren_hdr = r
-    r = _hdr(ws, ren_hdr, 2, IDCOLS + ["Prior exp.", "Current exp.", "Δ exposure"],
-             IDW + [15, 15, 15], white=True)
+    # "Program" here is the CURRENT (new) programme; "Renewed from" names the
+    # prior programme id so the renewal's programme-id change is explicit
+    # (e.g. Eutelsat 344558 → 385575).
+    r = _hdr(ws, ren_hdr, 2, IDCOLS + ["Prior exp.", "Current exp.", "Δ exposure",
+                                       "Renewed from"],
+             IDW + [15, 15, 15, 13], white=True)
     ren_first = r
     if ren_sid:
         # Pair prior vs current by the NORMALISED spacecraft id so a renewal onto
@@ -1859,6 +1885,7 @@ def _book_movement(wb, changes):
         # id than current — that is the reprice we want to show.
         cur_x = ren_new.groupby("_sid")["per_sc"].sum()
         pri_x = ren_old.groupby("_sid")["per_sc"].sum()
+        pri_prog = ren_old.groupby("_sid")["program_id"].first()
         meta = ren_new.groupby("_sid").agg(
             {"program_id": "first", "layer_id": "first",
              "spacecraft_name": "first", "entity": "first", "orbit": "first",
@@ -1871,6 +1898,7 @@ def _book_movement(wb, changes):
             _cell(ws, r, 9, p, alt=alt, money=True)
             _cell(ws, r, 10, c, alt=alt, money=True)
             _cell(ws, r, 11, c - p, alt=alt, money=True, bold=abs(c - p) > 1e6)
+            _cell(ws, r, 12, _progid(pri_prog.get(sid)), alt=alt)
             r += 1
         # Δ column conditionally formatted by sign
         drng = f"K{ren_first}:K{r - 1}"
@@ -1878,7 +1906,7 @@ def _book_movement(wb, changes):
             operator="greaterThan", formula=["0"], font=Font(name=_FB, size=10, color=GREEN)))
         ws.conditional_formatting.add(drng, CellIsRule(
             operator="lessThan", formula=["0"], font=Font(name=_FB, size=10, color="C0392B")))
-        _add_table(ws, "BM_Renewals", 2, ren_hdr, 11, r - 1)
+        _add_table(ws, "BM_Renewals", 2, ren_hdr, 12, r - 1)
     else:
         _cell(ws, r, 2, "— none —"); r += 1
     r += 1
@@ -1903,11 +1931,11 @@ def _book_movement(wb, changes):
                        "heuristic used.)")
     note.font = Font(name=_FB, size=9, italic=True, color=SOFT)
     note.alignment = Alignment(wrap_text=True, vertical="top")
-    ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=10)
+    ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=11)
     ws.row_dimensions[r].height = 28
 
     for col, w in {"B": 11, "C": 8, "D": 9, "E": 28, "F": 11, "G": 12, "H": 12,
-                   "I": 16, "J": 27, "K": 15}.items():
+                   "I": 16, "J": 27, "K": 15, "L": 13}.items():
         ws.column_dimensions[col].width = w
 
 
