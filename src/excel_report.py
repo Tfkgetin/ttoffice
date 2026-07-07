@@ -940,14 +940,49 @@ def _parameters(wb, params):
         ws.cell(row=r, column=2, value=title).font = F_SECT
         r += 1
 
+    _sqlc = (params.ingest.get("sql") or {}) if isinstance(params.ingest, dict) else {}
+    _srv = _sqlc.get("server", "LON-SQLP-V005")
+    _db = _sqlc.get("database", "SpaceTrax_Data")
+    _qf = _sqlc.get("query_file", "sql/space_rds_onrisk_asat.sql")
+    _rwf = _sqlc.get("renewal_watch_query_file")
+
     psection("Source extract")
+    prow("Connection", f"{_srv}  /  {_db}", "SQL Server / database",
+         f"Server={_srv};  Database={_db}", bold_val=False)
     prow("On-risk population", "rds.vw_SpaceRDS_OnRisk", "as-at filtered SQL view",
-         "Connection:  LON-SQLP-V005  /  SpaceTrax_Data", bold_val=False)
+         f"Query file:  {_qf}  (inline as-at param {{as_at}})", bold_val=False)
+    prow("Base layer detail", "Prequel_Reporting.Prequel.Layer_Details_v",
+         "IsBound=1, ASO/ASC, per-layer signed exposure",
+         "WHERE IsBound=1 AND Placing_Basis NOT IN ('Consortium Declaration')",
+         bold_val=False)
+    prow("Consortium split gate", "rds.param_consortium_splits", "MGU cession by inception",
+         "JOIN ... cs.[Start Date]<=inception AND cs.[End Date]>=inception "
+         "AND [Controlling Body]='MGU'  (a missing row silently drops the layer "
+         "— see the consortium-coverage pre-flight check)", bold_val=False)
     prow("As-at date", str(params.as_at), "drives on-risk window & RPF",
          "Parameters:  as_at_date = " + str(params.as_at), bold_val=False)
     prow("Manual add/remove", "rds.manually_controlled_rds_layers", "Action column",
          "SELECT * FROM rds.manually_controlled_rds_layers WHERE Action IN "
          "('Add Layer','Remove Layer')", bold_val=False)
+
+    psection("Renewal-policy checks (SQL) — verified this quarter")
+    prow("Forward renewal pointer", "J.Pbi.Layers_t", "latest snapshot; 0 = no renewal",
+         (f"Query file:  {_rwf}.  " if _rwf else "") +
+         "SELECT [Layer Id],[Program Id],NULLIF([Renewed To Program Id],0),"
+         "[Renewed To UW Status],[Renewed To Inception] FROM J.Pbi.Layers_t "
+         "WHERE [Snapshot Id]=(SELECT MAX([Snapshot Id]) FROM J.Pbi.Layers_t)",
+         bold_val=False)
+    prow("Successor-in-source check", "Layer_Details_v by ProgramId",
+         "is the renewal bound in source yet?",
+         "SELECT ProgramId,COUNT(*),SUM(Signed_Exposure_USD),MAX(CAST(IsBound AS INT)) "
+         "FROM Prequel.Layer_Details_v WHERE ProgramId IN (<expiring>,<successor>) "
+         "GROUP BY ProgramId  — drives rollforward vs let-it-flow decisions "
+         "(Eutelsat, Turksat, Arabsat, WorldView, Inmarsat GX)", bold_val=False)
+    prow("Consortium split coverage", "pre-flight warning",
+         "flags MGU split ending before as-at",
+         "Warns if the latest param_consortium_splits MGU row ends before the "
+         "as-at (the gap that dropped Turksat 6A until its 2026-04-01→06-30 "
+         "row was added)", bold_val=False)
 
     psection("IGR Quota Share")
     for ent, rate in raw["igr_qs"]["default"].items():
