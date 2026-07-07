@@ -258,6 +258,73 @@ def _load_prior_auto_book(path) -> pd.DataFrame:
     return L.reset_index(drop=True)
 
 
+def restore_addons(prior, cur_layers, p):
+    """Recompute the prior book's S3123 QS + IG equity add-ons from the engine's
+    own formulas when they arrived as zero (an auto prior book stores them as
+    uncached formulas). Without this the FIHL exec-basis (combined) prior
+    collapses to raw, so the Change-Narrative Δ compares current-with-add-ons
+    against prior-without — not like-for-like.
+
+    is_consortium is taken from the CURRENT book by spacecraft (the same
+    satellite carries the same consortium status quarter to quarter), because the
+    auto book's Per Layer tab does not carry the flag. Idempotent: if the prior
+    already holds non-zero add-ons (cached values), it is returned unchanged.
+    """
+    if prior is None or not len(prior) or p is None:
+        return prior
+    have = 0.0
+    for c in ("s3123_qs", "equity_usd"):
+        if c in prior.columns:
+            have += float(pd.to_numeric(prior[c], errors="coerce").fillna(0).sum())
+    if have > 0:
+        return prior
+
+    def _sid(v):
+        n = pd.to_numeric(v, errors="coerce")
+        return None if pd.isna(n) else int(n)
+
+    # consortium status per spacecraft, from the current book
+    cons = {}
+    if cur_layers is not None and "spacecraft_id" in getattr(cur_layers, "columns", []):
+        flag = cur_layers.get("is_consortium")
+        if flag is None:
+            flag = ((pd.to_numeric(cur_layers.get("s3123_qs"), errors="coerce").fillna(0) > 0)
+                    | (pd.to_numeric(cur_layers.get("equity_usd"), errors="coerce").fillna(0) > 0))
+        for sid, ic in zip(cur_layers["spacecraft_id"], flag):
+            k = _sid(sid)
+            if k is not None:
+                cons[k] = bool(ic) or cons.get(k, False)
+
+    q = p.s3123_qs
+    cs = q.get("consortium_start")
+    cons_start = pd.Timestamp(cs).date() if cs else None
+    date_from = pd.Timestamp(q["date_from"]).date()
+    if cons_start:
+        date_from = max(date_from, cons_start)
+    date_to = pd.Timestamp(q["date_to"]).date()
+    excl = {int(x) for x in (q.get("excluded", []) or [])}
+    cession = float(q["cession"])
+
+    prior = prior.copy()
+    s3, eq = [], []
+    for _, row in prior.iterrows():
+        inc = row.get("inception")
+        inc = pd.Timestamp(inc).date() if pd.notna(inc) else None
+        sid = _sid(row.get("spacecraft_id"))
+        is_cons = cons.get(sid, False)
+        if inc is not None and cons_start and inc < cons_start:
+            is_cons = False
+        px = float(row.get("per_sc") or 0.0)
+        fac = p.s3123_factor(inc) if inc else 0.0
+        eq.append(px * p.equity_pct(inc, is_cons) * fac if inc else 0.0)
+        elig = (is_cons and inc is not None and sid not in excl
+                and date_from <= inc <= date_to)
+        s3.append(px * cession * fac if elig else 0.0)
+    prior["s3123_qs"] = s3
+    prior["equity_usd"] = eq
+    return prior
+
+
 # --------------------------------------------------------------------------- #
 # changes dict — exactly the schema excel_report._changes / _exposure_bridge /
 # waterfalls.build_movement_waterfalls consume

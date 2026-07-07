@@ -63,6 +63,9 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
         try:
             from . import prior_seed, netting as _net
             prior_layers = prior_seed.load_prior_workbook(prior_wb)
+            # Restore prior S3123/equity add-ons if the auto book cached them as
+            # formulas — keeps the FIHL combined prior on the same basis as current.
+            prior_layers = prior_seed.restore_addons(prior_layers, per_layer, params)
             prior_grid = _net.summary_grid(prior_layers, params)
             label = params.raw.get("prior_as_at_label") or "prior (frozen workbook)"
             frozen_chg = prior_seed.build_changes(per_layer, summary,
