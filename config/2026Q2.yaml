@@ -82,13 +82,14 @@ renewal_rollforward:
   # A roll-forward here would DOUBLE-COUNT. (The J.Pbi snapshot still reads "NBI",
   # a stale pointer status — the bound source layers are the source of truth.)
   #
-  # PENDING UW SIGN-OFF — one whole-fleet renewal not yet in source (J.Pbi
-  # 2026-07-05): IsBound=0, Direct Open Market (no cession), signed=0 (no source
-  # exposure yet), every expiring layer points to the single successor. Uncomment
-  # once the UW confirms the fleet renews (as JJ did for Eutelsat) AND source is
-  # still empty — if 385466 has since bound in source, leave it commented (it will
-  # flow automatically like Arabsat did).
-  # - {from_program: 343724, to_program: 385466, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", mapping_code: ASO, renewal_uw_status: "Quoted/Awaiting FOT", renewal_snapshot: "2026-07-05", reason: "Inmarsat GX fleet renewal 343724 → 385466 — pending UW sign-off; unbound (Quoted), carried at Q1 line size"}
+  # Inmarsat GX 343724 → 385466: CARRIED for RDS. The renewal is quoted / in
+  # progress but not yet bound or entered in source (J.Pbi 2026-07-05: IsBound=0,
+  # Direct Open Market, signed=0), every expiring layer points to the single
+  # successor 385466. For RDS we refresh exposure to reflect it as a renewal (the
+  # risk is live even before the bind lands). Carried at Q1 line size; the
+  # spacecraft-level safeguard auto-retires it once 385466 binds in source (you'll
+  # see "SKIPPED — renewal already bound in source"), so it can never double-count.
+  - {from_program: 343724, to_program: 385466, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", mapping_code: ASO, renewal_uw_status: "Quoted/Awaiting FOT", renewal_snapshot: "2026-07-05", reason: "Inmarsat GX fleet renewal 343724 → 385466 — in progress / unbound; carried for RDS at Q1 line size so exposure is refreshed; auto-retires when 385466 binds in source"}
 
 # ---- Renewal overrides -----------------------------------------------------
 # UW-confirmed old→new programme links the J.Pbi 'Renewed To' pointer doesn't
@@ -305,8 +306,9 @@ reconciliation_notes:
   - {program_id: 341568, category: "Lapse — covered elsewhere", date_logged: "2026Q2", note: "WorldView / Maxar Legion Fleet 341568 (expired 2026-05-02) continues as 369418 'Legion Satellites In-Orbit Fleet'. VERIFIED in the book: 369418 = 12 ASO / Direct Open Market layers, IsBound=1, on-risk 2026-02-05→2027-02-04, ~$90m signed. Covered and counted under 369418 — do NOT roll forward (double-count). Set via renewal_overrides (J.Pbi pointer absent for this programme change): 341568 is excluded from all Book Movement tables — it is a non-event."}
   - {program_id: 278759, category: "Lapse — genuine (self-insured)", date_logged: "2026Q2", note: "SXM-10 / Sirius XM do not buy in-orbit insurance — genuine non-renewal, no policy to renew. Correctly off the book; expected lapse each quarter (do not chase)."}
   - {program_id: 277977, category: "Lapse — genuine (self-insured)", date_logged: "2026Q2", note: "SXM-10 (2nd programme) — Sirius XM self-insure in-orbit; genuine non-renewal."}
-  - {program_id: 328274, category: "Lapse — future renewal", date_logged: "2026Q2", note: "Spainsat NG-1 renews 2026-08-01 (after the 1-July as-at) — legitimately off the book for 2026Q2, returns in 2026Q3. Not a loss, a timing gap."}
-  - {program_id: 334082, category: "Lapse — future renewal", date_logged: "2026Q2", note: "Spainsat NG-1 (2nd programme) — renewal 2026-08-01; off-book for Q2, returns Q3."}
+  - {program_id: 328274, category: "Lapse — future renewal", date_logged: "2026Q2", note: "Spainsat NG-1 renews 2026-08-01 (after the 1-July as-at) — legitimately off the book for 2026Q2, returns in 2026Q3. Not a loss, a timing gap. NOT carried (not on-risk this quarter — carrying it would overstate)."}
+  - {program_id: 334082, category: "Lapse — future renewal", date_logged: "2026Q2", note: "Spainsat NG-1 (2nd programme) — renewal 2026-08-01; off-book for Q2, returns Q3. NOT carried."}
+  - {program_id: 343724, category: "Renewal — in progress, carried for RDS", date_logged: "2026Q2", note: "Inmarsat GX 343724 renews to 385466 (Quoted/Awaiting FOT). Not yet bound / not in source as-at (J.Pbi 2026-07-05: IsBound=0, signed=0), but the renewal is live — for RDS the exposure is refreshed by carrying the Q1 fleet forward via renewal_rollforward (343724 → 385466). Shows in the Renewals table, not Pending. Auto-retires (safeguard skips it) once 385466 binds in source."}
 
 # ---- Entities --------------------------------
 entities: ["FIHL", "FUL", "FIID", "FIBL"]
