@@ -712,6 +712,39 @@ def linkify_cover(wb, sheet="Cover", summary="Summary", per_layer="Per Layer"):
                 f'="$"&TEXT(Summary!D{sr}/1000000,"#,##0.0")&"m  ·  Space Weather"')
 
 
+# --------------------------------------------------------------------------- #
+#  Change Narrative  →  Summary (current side) ; prior stays a value            #
+# --------------------------------------------------------------------------- #
+def linkify_change_narrative(wb, sheet="Change Narrative", summary="Summary"):
+    """De-hardcode the Change Narrative's current columns by linking them to the
+    canonical Summary cascade (Cur Gross → Summary!D combined/receiver basis,
+    Cur Net → Summary!J). Δ / Δ% are already live formulas off these cells.
+    Prior stays a value — it's the frozen prior quarter, with no tab to point
+    at (same as every other 'Prior' column in the book)."""
+    if sheet not in wb.sheetnames or summary not in wb.sheetnames:
+        return
+    ws = wb[sheet]
+    bases = _summary_bases(wb[summary])
+    if "FIHL" not in bases:
+        return
+
+    def srow(ent, scen):
+        b = bases.get(ent)
+        return None if (b is None or scen not in SCEN_ORDER) else b + SCEN_ORDER.index(scen)
+
+    cur_scen = None
+    for r in range(1, ws.max_row + 1):
+        b = str(ws.cell(row=r, column=2).value or "").strip()
+        if b in SCEN_ORDER:
+            cur_scen = b
+            continue
+        if b in ("FIHL", "FUL", "FIBL", "FIID") and cur_scen:
+            sr = srow(b, cur_scen)
+            if sr:
+                ws.cell(row=r, column=4).value = f"=Summary!D{sr}"   # Cur Gross
+                ws.cell(row=r, column=5).value = f"=Summary!J{sr}"   # Cur Net
+
+
 def linkify(wb):
     linkify_per_layer(wb)
     linkify_netting(wb)
@@ -719,3 +752,4 @@ def linkify(wb):
     linkify_portfolio(wb)
     linkify_changes(wb)
     linkify_cover(wb)
+    linkify_change_narrative(wb)
