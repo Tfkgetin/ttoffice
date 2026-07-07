@@ -608,6 +608,42 @@ def linkify_changes(wb, sheet="Changes", summary="Summary",
                 ws.cell(row=rw, column=7).value = (
                     f"=C{rw}*{dr['GEO']}+D{rw}*{dr['MEO']}+E{rw}*{dr['LEO']}")
 
+    # ---- Exposure-bridge 'Check vs current book' + RPF-adjusted 'Current' -----
+    # Both are pure current-book figures — link them so they can never go stale.
+    #   Check vs current book = SUM of Per Layer per_sc (the whole book).
+    #   RPF-adjusted 'Current' = SUMPRODUCT(per_sc × rpf) by orbit group; the
+    #   Per Layer rpf column is itself a live formula, so this ties to the engine.
+    n = wb[per_layer].max_row
+    L_rng, K_rng, G_rng = (f"{PL}!{PSC}2:{PSC}{n}", f"{PL}!K2:K{n}",
+                           f"{PL}!{ORB}2:{ORB}{n}")
+    for r in range(1, ws.max_row + 1):
+        if str(ws.cell(row=r, column=2).value or "") == "Check vs current book":
+            ws.cell(row=r, column=3).value = f"=SUM({L_rng})"
+    # RPF-adjusted block: header row has C='Prior', D='Current'
+    for r in range(1, ws.max_row + 1):
+        if not (str(ws.cell(row=r, column=3).value or "") == "Prior"
+                and str(ws.cell(row=r, column=4).value or "") == "Current"):
+            continue
+        geo_meo = leo = None
+        rr = r + 1
+        while rr <= ws.max_row:
+            lbl = str(ws.cell(row=rr, column=2).value or "")
+            if lbl.startswith("GEO"):
+                ws.cell(row=rr, column=4).value = (
+                    f'=SUMPRODUCT((ISNUMBER(SEARCH("GEO",{G_rng}))'
+                    f'+ISNUMBER(SEARCH("MEO",{G_rng})))*{L_rng}*{K_rng})')
+                geo_meo = rr
+            elif lbl == "LEO":
+                ws.cell(row=rr, column=4).value = (
+                    f'=SUMPRODUCT(ISNUMBER(SEARCH("LEO",{G_rng}))*{L_rng}*{K_rng})')
+                leo = rr
+            elif lbl == "Total":
+                if geo_meo and leo:
+                    ws.cell(row=rr, column=4).value = f"=D{geo_meo}+D{leo}"
+                break
+            rr += 1
+        break
+
 
 # --------------------------------------------------------------------------- #
 #  Cover  →  Summary / Per Layer                                                #
