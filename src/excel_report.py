@@ -479,11 +479,17 @@ def _summary(ws, grid, params, source, per_layer):
             # FIX(recon 2026Q1, C1): FIHL ex-add-on memo (manual convention)
             equity_ref = None
             if _memo_here:
-                for j, (k, _lbl) in enumerate(
-                        [m for m in FIHL_MEMO if m[0] in grid.columns]):
+                memo_present = [m for m in FIHL_MEMO if m[0] in grid.columns]
+                for j, (k, _lbl) in enumerate(memo_present):
                     _cell(ws, r, 12 + j, val(k), alt=alt, money=True)
                     if k == "equity_usd":
                         equity_ref = f"{get_column_letter(12 + j)}{r}"
+                # FIHL headline Gross = ex-add-on gross + S3123 QS + IG equity —
+                # the memo columns just written. Make col D their live SUM so the
+                # combined build-up is transparent, not a baked number.
+                if memo_present:
+                    last = get_column_letter(11 + len(memo_present))
+                    _cell(ws, r, 4, f"=SUM(L{r}:{last}{r})", alt=alt, money=True)
             # capture this row's cell refs for downstream live-formula sheets
             rowmap[(entity, val("scenario"))] = {
                 "gross": f"D{r}", "ext_qs": f"E{r}", "igr_qs": f"G{r}",
@@ -3137,8 +3143,14 @@ def write_results(path, per_layer, sw, mr, grid, params, source,
     try:
         from . import linkify
         linkify.linkify(wb)
-    except Exception:
-        pass
+    except Exception as _e:  # noqa: BLE001
+        # Don't fail silently: a linkify error leaves the numbers HARD-CODED
+        # (values still correct, but not live formulas). Surface it so a layout
+        # drift can't quietly un-link the workbook again.
+        import traceback
+        print(f"      WARNING: linkify skipped ({_e}) — tabs will show baked "
+              f"values, not live formulas. Check tab layouts vs linkify locators.")
+        traceback.print_exc()
     # Embed the tab-dependency map as its own worksheet (after Cover).
     try:
         from . import tabmap
