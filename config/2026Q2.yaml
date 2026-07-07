@@ -89,10 +89,10 @@ renewal_rollforward:
 # UW-confirmed old→new programme links the J.Pbi 'Renewed To' pointer doesn't
 # carry (e.g. a fleet that re-attaches under a new programme with different ids).
 # CLASSIFICATION ONLY — reclassifies Book Movement, never injects exposure. If
-# the 'to_program' is already in the current book, the expiring layer moves to
-# the 'Renewed — covered in the book' table (out of Lapsed); if not, it reads as
-# a renewal in progress. Use renewal_rollforward (not this) to actually CARRY a
-# renewal that isn't in source.
+# the 'to_program' is already in the current book, the expiring layers are
+# excluded from ALL Book Movement tables (not a loss, not a gap — non-event);
+# if not, they read as a renewal in progress. Use renewal_rollforward (not this)
+# to actually CARRY a renewal that isn't in source.
 renewal_overrides:
   # WorldView / Maxar Legion Fleet 341568 (expired 2026-05-02) → Legion
   # Satellites In-Orbit Fleet 369418 (bound, in the book, ~$90m signed). Covered
@@ -297,7 +297,7 @@ data_corrections:
 # is actually fine (covered elsewhere / self-insured / renews next quarter).
 reconciliation_notes:
   # UW disposition of 2026Q2 "No renewal pointer" lapses (Teams, 2026-07):
-  - {program_id: 341568, category: "Lapse — covered elsewhere", date_logged: "2026Q2", note: "WorldView / Maxar Legion Fleet 341568 (expired 2026-05-02) continues as 369418 'Legion Satellites In-Orbit Fleet'. VERIFIED in the book: 369418 = 12 ASO / Direct Open Market layers, IsBound=1, on-risk 2026-02-05→2027-02-04, ~$90m signed. Covered and counted under 369418 — do NOT roll forward (double-count). The Book Movement 'lapsed' line for 341568 is display-only (renewal pointer unset in J.Pbi)."}
+  - {program_id: 341568, category: "Lapse — covered elsewhere", date_logged: "2026Q2", note: "WorldView / Maxar Legion Fleet 341568 (expired 2026-05-02) continues as 369418 'Legion Satellites In-Orbit Fleet'. VERIFIED in the book: 369418 = 12 ASO / Direct Open Market layers, IsBound=1, on-risk 2026-02-05→2027-02-04, ~$90m signed. Covered and counted under 369418 — do NOT roll forward (double-count). Set via renewal_overrides (J.Pbi pointer absent for this programme change): 341568 is excluded from all Book Movement tables — it is a non-event."}
   - {program_id: 278759, category: "Lapse — genuine (self-insured)", date_logged: "2026Q2", note: "SXM-10 / Sirius XM do not buy in-orbit insurance — genuine non-renewal, no policy to renew. Correctly off the book; expected lapse each quarter (do not chase)."}
   - {program_id: 277977, category: "Lapse — genuine (self-insured)", date_logged: "2026Q2", note: "SXM-10 (2nd programme) — Sirius XM self-insure in-orbit; genuine non-renewal."}
   - {program_id: 328274, category: "Lapse — future renewal", date_logged: "2026Q2", note: "Spainsat NG-1 renews 2026-08-01 (after the 1-July as-at) — legitimately off the book for 2026Q2, returns in 2026Q3. Not a loss, a timing gap."}
