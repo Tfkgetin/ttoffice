@@ -260,48 +260,57 @@ def linkify_netting(wb, sheet="Netting Waterfalls", summary="Summary"):
         b = bases.get(entity)
         return None if b is None else b + SCEN_ORDER.index(scen)
 
-    # --- combined gross/net table: find the two basis blocks ----------------
-    # header row has 'Scenario | Basis | FIHL | FUL | FIBL | FIID'
-    hdr = None
+    # --- combined gross / net tables ----------------------------------------
+    # Two stacked tables built by _waterfalls, each headed
+    #   'Scenario | FIHL | FUL | FIBL | FIID'  (cols 2..6, FIHL in col 3)
+    # with the basis ('gross' / 'net') in the section title above each header.
+    # Link every entity cell to the canonical Summary cascade so the tab is a
+    # formula-linked view of Summary. NB FIHL mirrors Summary's COMBINED basis
+    # (incl S3123 QS + IG equity) — the book-wide FIHL headline convention.
+    ent_col = {"FIHL": 3, "FUL": 4, "FIBL": 5, "FIID": 6}
     for r in range(1, ws.max_row + 1):
-        if (ws.cell(row=r, column=2).value == "Scenario"
-                and ws.cell(row=r, column=4).value == "FIHL"):
-            hdr = r
-            break
-    if hdr:
-        ent_col = {"FIHL": 4, "FUL": 5, "FIBL": 6, "FIID": 7}
-        for r in range(hdr + 1, ws.max_row + 1):
-            scen = ws.cell(row=r, column=2).value
-            basis = ws.cell(row=r, column=3).value
-            if scen not in SCEN_ORDER or basis not in ("Gross", "Net"):
-                continue
-            scol = "D" if basis == "Gross" else "J"   # Summary Gross / Net
+        if not (ws.cell(row=r, column=2).value == "Scenario"
+                and ws.cell(row=r, column=3).value == "FIHL"):
+            continue
+        basis = None
+        for rr in range(r - 1, max(0, r - 4), -1):
+            t = str(ws.cell(row=rr, column=2).value or "").lower()
+            if "gross" in t:
+                basis = "Gross"; break
+            if "net" in t:
+                basis = "Net"; break
+        scol = "J" if basis == "Net" else "D"       # Summary Net / Gross
+        rr = r + 1
+        while rr <= ws.max_row and ws.cell(row=rr, column=2).value in SCEN_ORDER:
+            scen = ws.cell(row=rr, column=2).value
             for ent, c in ent_col.items():
                 sr = srow(ent, scen)
                 if sr:
-                    ws.cell(row=r, column=c).value = f"=Summary!{scol}{sr}"
+                    ws.cell(row=rr, column=c).value = f"=Summary!{scol}{sr}"
+            rr += 1
 
     # --- cede-down detail blocks: link each step to Summary -----------------
-    # step offsets from the 'Gross Loss' row of a block
-    # 0 Gross Loss · 1 less External QS · 2 less Other Ext RI ·
-    # 3 less QS Ceded to FIBL · 4 less XoL Ceded to FIBL · 5 Net (sum)
+    # Four blocks per scenario at label/amount column pairs:
+    #   (2,3) FIHL · (5,6) FUL · (8,9) FIBL · (11,12) FIID
+    # step offsets from the 'Gross Loss' row: 0 Gross · 1 less Ext QS ·
+    # 2 less Other Ext RI · 3 less QS to FIBL · 4 less XoL to FIBL · 5 Net.
+    # The Net row is already a live =SUM(...) written by the builder — leave it.
     for r in range(1, ws.max_row + 1):
-        for label_col, amt_col in ((2, 3), (5, 6)):       # FUL block, FIID block
+        for label_col, amt_col in ((2, 3), (5, 6), (8, 9), (11, 12)):
             if ws.cell(row=r, column=label_col).value != "Gross Loss":
                 continue
-            head = ws.cell(row=r - 2, column=label_col).value or ""
-            entity = next((e for e in ("FUL", "FIID") if str(head).startswith(e)), None)
-            scen = next((s for s in SCEN_ORDER if s in str(head)), None)
+            head = str(ws.cell(row=r - 2, column=label_col).value or "")
+            entity = next((e for e in ("FIHL", "FUL", "FIBL", "FIID")
+                           if head.startswith(e)), None)
+            scen = next((s for s in SCEN_ORDER if s in head), None)
             sr = srow(entity, scen) if entity and scen else None
             if not sr:
                 continue
-            ac = _col_letter(amt_col)
             ws.cell(row=r, column=amt_col).value = f"=Summary!D{sr}"            # Gross
             ws.cell(row=r + 1, column=amt_col).value = f"=-Summary!E{sr}"       # less Ext QS
             ws.cell(row=r + 2, column=amt_col).value = 0                        # Other Ext RI
             ws.cell(row=r + 3, column=amt_col).value = f"=-Summary!G{sr}"       # less IGR QS
             ws.cell(row=r + 4, column=amt_col).value = f"=-Summary!I{sr}"       # less XoL
-            ws.cell(row=r + 5, column=amt_col).value = f"=SUM({ac}{r}:{ac}{r+4})"  # Net (waterfall)
 
     # --- chart scaffold (Step | Source | Base | Decrease | Total) ------------
     # link Source to Summary so the floating-waterfall mini-chart is live
