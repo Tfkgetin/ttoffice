@@ -1699,28 +1699,43 @@ def _changes(wb, changes, per_layer=None, params=None):
     r = _manual_qoq_tables(ws, r, per_layer, changes.get("prior_layers"))
 
     s = changes["layers"]["summary"]
+    # Split the dropped set by outcome so 'dropped exposure' is not the misleading
+    # raw layer-key total (most of which RENEW onto a new programme id). Mirrors
+    # Book Movement: New business / Renewed / (in-progress) / genuinely Lapsed.
+    from . import renewals as _rnw
+    _sp = _rnw.split_movement(changes["layers"].get("new"),
+                              changes["layers"].get("dropped"))
+
+    def _sx(df):
+        return (float(pd.to_numeric(df.get("per_sc"), errors="coerce").fillna(0).sum())
+                if df is not None and len(df) else 0.0)
+    _lap = _sp.get("lapsed")
+    _COV, _PEND = ("bound_captured",), ("in_progress", "bound_missing")
+    if _lap is not None and len(_lap) and "renewal_state" in getattr(_lap, "columns", []):
+        gone_x = _sx(_lap[~_lap["renewal_state"].isin(_COV + _PEND)])
+        pend_x = _sx(_lap[_lap["renewal_state"].isin(_PEND)])
+    else:
+        gone_x, pend_x = _sx(_lap), 0.0
+    nb_x, ren_x = _sx(_sp.get("new_biz")), _sx(_sp.get("ren_new"))
+
     r = _section(ws, r, "Layer movement")
     r = _kv(ws, r, "New layers", s["new_layers"])
     r = _kv(ws, r, "Dropped layers", s["dropped_layers"])
     r = _kv(ws, r, "Layers with exposure move", s["moved_layers"])
-    r = _kv(ws, r, "New exposure", s["new_exposure"], money=True)
-    r = _kv(ws, r, "Dropped exposure", s["dropped_exposure"], money=True)
+    r = _kv(ws, r, "New business exposure", nb_x, money=True)
+    r = _kv(ws, r, "Renewed (rewritten) exposure", ren_x, money=True)
+    if pend_x:
+        r = _kv(ws, r, "Renewals in progress (unbound)", pend_x, money=True)
+    r = _kv(ws, r, "Lapsed exposure (off the book)", gone_x, money=True)
     r = _kv(ws, r, "Net move on continuing layers", s["net_move"], money=True)
-    # Reconcile the two movement views: 'Exposure bridge by reason' (above) nets
-    # programme continuations, so its new/dropped are smaller than this raw
-    # layer-key count by the churn on renewed spacecraft (same layer written on a
-    # new programme id reads as new+dropped here, but as a continuation there).
-    # The NET movement is identical in both — only the gross split differs.
     rn = ws.cell(row=r, column=2, value=(
-        "Note: 'New/Dropped exposure' here is a raw layer-key count and runs "
-        "higher than the 'Exposure bridge by reason' new/dropped above — the "
-        "difference is renewal churn (a spacecraft rewritten onto a new "
-        "programme id counts as new+dropped here, as a continuation there). The "
-        "NET movement reconciles in both."))
+        "Dropped layers are split by outcome: most RENEW (rewritten onto a new "
+        "programme id) and stay in the book — only the 'Lapsed' line genuinely "
+        "leaves. Splits match the Book Movement tab."))
     rn.font = Font(name=_FB, size=9, italic=True, color=SOFT)
     rn.alignment = Alignment(wrap_text=True, vertical="top")
     ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=7)
-    ws.row_dimensions[r].height = 40
+    ws.row_dimensions[r].height = 28
     r += 2
 
     r = _section(ws, r, "By scenario (net)")
