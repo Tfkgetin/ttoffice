@@ -1667,7 +1667,7 @@ def _manual_qoq_tables(ws, r, cur, pri):
     return r
 
 
-def _changes(wb, changes, per_layer=None):
+def _changes(wb, changes, per_layer=None, params=None):
     if not changes:
         return
     ws = wb.create_sheet("Changes")
@@ -1706,7 +1706,22 @@ def _changes(wb, changes, per_layer=None):
     r = _kv(ws, r, "New exposure", s["new_exposure"], money=True)
     r = _kv(ws, r, "Dropped exposure", s["dropped_exposure"], money=True)
     r = _kv(ws, r, "Net move on continuing layers", s["net_move"], money=True)
-    r += 1
+    # Reconcile the two movement views: 'Exposure bridge by reason' (above) nets
+    # programme continuations, so its new/dropped are smaller than this raw
+    # layer-key count by the churn on renewed spacecraft (same layer written on a
+    # new programme id reads as new+dropped here, but as a continuation there).
+    # The NET movement is identical in both — only the gross split differs.
+    rn = ws.cell(row=r, column=2, value=(
+        "Note: 'New/Dropped exposure' here is a raw layer-key count and runs "
+        "higher than the 'Exposure bridge by reason' new/dropped above — the "
+        "difference is renewal churn (a spacecraft rewritten onto a new "
+        "programme id counts as new+dropped here, as a continuation there). The "
+        "NET movement reconciles in both."))
+    rn.font = Font(name=_FB, size=9, italic=True, color=SOFT)
+    rn.alignment = Alignment(wrap_text=True, vertical="top")
+    ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=7)
+    ws.row_dimensions[r].height = 40
+    r += 2
 
     r = _section(ws, r, "By scenario (net)")
     sc = changes["scenarios"]
@@ -1803,6 +1818,21 @@ def _changes(wb, changes, per_layer=None):
     # tranche expiring at quarter-close shows up here). Surfaced so the QoQ
     # trough is explained, not mistaken for a loss.
     rg = changes["layers"].get("renewal_gaps")
+    # Drop 'covered' renewals (bound & already in the book under another programme
+    # id, e.g. WorldView → 369418) — they are NOT off the book, so they must not
+    # appear in the gaps list (Book Movement excludes them too).
+    if rg is not None and len(rg) and "renewal_state" in getattr(rg, "columns", []):
+        rg = rg[rg["renewal_state"] != "bound_captured"].copy()
+    # UW dispositions keyed by programme id (reconciliation_notes) so a documented
+    # gap (self-insured / future renewal / covered elsewhere) reads with its reason
+    # instead of looking like an unexplained loss.
+    _disp = {}
+    if params is not None:
+        for n in (getattr(params, "raw", {}) or {}).get("reconciliation_notes", []) or []:
+            try:
+                _disp[int(n.get("program_id"))] = str(n.get("category", ""))
+            except (TypeError, ValueError):
+                pass
     if rg is not None and len(rg):
         r += 1
         gx = float(rg["per_sc"].sum())
@@ -1810,13 +1840,14 @@ def _changes(wb, changes, per_layer=None):
                             f"the book (${gx:,.0f})")
         c = ws.cell(row=r, column=2, value="Expired with no current/renewed "
                     "layer — verify these are true non-renewals, not renewals "
-                    "not yet bound or entered in the source.")
+                    "not yet bound or entered in the source. 'Disposition' shows "
+                    "any UW note on record (self-insured / future renewal / etc).")
         c.font = Font(name=_FB, size=9, italic=True, color=SOFT)
         ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=6)
         ws.row_dimensions[r].height = 26
         r += 2
-        r = _hdr(ws, r, 2, ["Spacecraft", "Entity", "Orbit", "Exposure"],
-                 [28, 10, 12, 15])
+        r = _hdr(ws, r, 2, ["Spacecraft", "Entity", "Orbit", "Exposure",
+                            "Disposition"], [28, 10, 12, 15, 34])
         for k, (_, row) in enumerate(rg.sort_values("per_sc", ascending=False)
                                      .head(15).iterrows()):
             alt = k % 2 == 0
@@ -1824,6 +1855,13 @@ def _changes(wb, changes, per_layer=None):
             _cell(ws, r, 3, str(row.get("entity", "")), alt=alt)
             _cell(ws, r, 4, str(row.get("orbit", "")), alt=alt)
             _cell(ws, r, 5, row.get("per_sc"), alt=alt, money=True)
+            # Disposition: UW note by programme id, else the pointer classification
+            try:
+                pid = int(row.get("program_id"))
+            except (TypeError, ValueError):
+                pid = None
+            disp = _disp.get(pid) or str(row.get("renewal_label", "") or "")
+            _cell(ws, r, 6, disp, alt=alt)
             r += 1
 
     # Pin Changes-tab column widths explicitly (this tab mixes a wide-label
@@ -3086,7 +3124,7 @@ def write_results(path, per_layer, sw, mr, grid, params, source,
                         manual_includes=manual_includes)
     _methodology(wb, params, changes)
     _audit(wb, per_layer, params, source, recon, excluded)
-    _changes(wb, changes, per_layer)
+    _changes(wb, changes, per_layer, params)
     try:
         _book_movement(wb, changes)
     except Exception as _e:  # noqa: BLE001 - detail tab is non-essential
