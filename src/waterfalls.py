@@ -415,7 +415,10 @@ def _wf_exposure(wb, per_layer, changes, params, ref, prior_layers=None):
 
 
 def _slice_bridges(ws, r, per_layer, prior_layers,
-                   dims=("entity", "orbit", "bus_manufacturer")):
+                   dims=("entity", "orbit")):
+    # Manufacturer slice-bridges dropped (user 2026Q2): too many thin per-maker
+    # waterfalls; manufacturer concentration is still on the 'By bus manufacturer'
+    # composition panel above. Entity / orbit bridges are retained.
     cur = per_layer.copy(); prior = prior_layers.copy()
     if "layer_key" in cur:
         cur["layer_key"] = cur["layer_key"].astype(str)
@@ -487,6 +490,20 @@ def _wf_loss(wb, summary, changes, params, ref):
         "RDS views and are never summed; the worst one sets capital.")).font = F_SUB
     r += 2
 
+    # Gross levels alongside net (user 2026Q2: show BOTH gross and net). Links to
+    # the Changes 'By scenario (gross)' block when present.
+    if ref.get("gross_base", {}).get(GROUP) is not None:
+        gcur = [_scen_ref(ref, "gross_base", GROUP, s, "cur") for s in SCEN_ORDER]
+        gprior = [_scen_ref(ref, "gross_base", GROUP, s, "prior") for s in SCEN_ORDER]
+        r = _section(ws, r, f"All scenarios \u2014 {GROUP} gross loss, current vs prior")
+        r = _clustered(ws, r, 2, "", cats_flag,
+                       [("Prior", [f"={x}" for x in gprior], NAVY_LT),
+                        ("Current", [f"={x}" for x in gcur], NAVY)])
+        ws.cell(row=r, column=2, value=(
+            "Gross (pre-reinsurance) levels for the same scenarios \u2014 compare with "
+            "the net chart above to see how much the RI structure absorbs.")).font = F_SUB
+        r += 2
+
     drefs = [f"={_scen_ref(ref, 'net_base', GROUP, s, 'delta')}" for s in SCEN_ORDER]
     signs = []
     for s in SCEN_ORDER:
@@ -525,22 +542,36 @@ def _wf_loss(wb, summary, changes, params, ref):
                 "reinsurance structure rather than reaching the net account.")).font = F_SUB
             r += 3
 
-    r = _section(ws, r, "QoQ net loss by entity \u00d7 scenario ($)  (links to Changes)")
-    r = _hdr(ws, r, 2, ["Entity", "Scenario", "Current Net", "Prior Net",
-                        "\u0394 Net", "\u0394 %"], [10, 18, 15, 15, 15, 9])
+    r = _section(ws, r, "QoQ loss by entity \u00d7 scenario ($) \u2014 gross AND net  "
+                        "(links to Changes)")
+    r = _hdr(ws, r, 2, ["Entity", "Scenario", "Cur Gross", "Prior Gross",
+                        "\u0394 Gross", "Cur Net", "Prior Net", "\u0394 Net",
+                        "\u0394 % Net"],
+             [10, 18, 14, 14, 14, 14, 14, 14, 9])
     k = 0
     for ent in ENT_ORDER:
         base = ref["net_base"].get(ent)
+        gbase = ref.get("gross_base", {}).get(ent)
         if base is None:
             continue
         for j, scn in enumerate(SCEN_ORDER):
             rr = base + j; alt = k % 2 == 0
             _cell(ws, r, 2, ent, alt=alt, bold=(j == 0))
             _cell(ws, r, 3, scn, alt=alt)
-            _fcell(ws, r, 4, f"=Changes!D{rr}", alt=alt, fmt=MONEY)
-            _fcell(ws, r, 5, f"=Changes!E{rr}", alt=alt, fmt=MONEY)
-            _fcell(ws, r, 6, f"=Changes!F{rr}", alt=alt, fmt=MONEY)
-            _fcell(ws, r, 7, f"=IFERROR(Changes!F{rr}/Changes!E{rr},0)", alt=alt, fmt=PCT)
+            # Gross (links to the Changes 'By scenario (gross)' block when present)
+            if gbase is not None:
+                gr = gbase + j
+                _fcell(ws, r, 4, f"=Changes!D{gr}", alt=alt, fmt=MONEY)
+                _fcell(ws, r, 5, f"=Changes!E{gr}", alt=alt, fmt=MONEY)
+                _fcell(ws, r, 6, f"=Changes!F{gr}", alt=alt, fmt=MONEY)
+            else:
+                for cc in (4, 5, 6):
+                    _cell(ws, r, cc, None, alt=alt)
+            # Net
+            _fcell(ws, r, 7, f"=Changes!D{rr}", alt=alt, fmt=MONEY)
+            _fcell(ws, r, 8, f"=Changes!E{rr}", alt=alt, fmt=MONEY)
+            _fcell(ws, r, 9, f"=Changes!F{rr}", alt=alt, fmt=MONEY)
+            _fcell(ws, r, 10, f"=IFERROR(Changes!F{rr}/Changes!E{rr},0)", alt=alt, fmt=PCT)
             r += 1; k += 1
 
 
