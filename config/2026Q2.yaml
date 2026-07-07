@@ -75,14 +75,19 @@ renewal_rollforward:
     renewal_uw_status: "Bound (Signed Off)"
     renewal_snapshot: "2026-07-05"
     reason: "Turksat 6A renewal 341429 → 377766 — MGU split (2026-04-01→06-30, 0.5882) now added, so 377766 flows from source (~$9.12m); this is a self-retiring safety net (double-count safeguard skips it) — delete once a run confirms 377766 from source"
-  # PENDING UW SIGN-OFF — two whole-fleet renewals confirmed by data (J.Pbi
-  # 2026-07-05): both IsBound=0, Direct Open Market (no cession), signed=0 (no
-  # source exposure yet), every expiring layer points to the single successor.
-  # Uncomment each once the UW confirms the fleet renews (as JJ did for Eutelsat).
-  # ~$140m combined; verify the Arabsat prior-book count (6 birds vs 12 source
-  # expiring layers) with the UW before relying on it. Arabsat is at NBI stage
-  # (earlier/less certain) than Inmarsat GX (Quoted/Awaiting FOT).
-  # - {from_program: 344664, to_program: 382904, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", mapping_code: ASO, renewal_uw_status: "NBI", renewal_snapshot: "2026-07-05", reason: "Arabsat fleet renewal 344664 → 382904 — pending UW sign-off; unbound (NBI), carried at Q1 line size"}
+  # Arabsat 344664 → 382904: NOW LIVE IN SOURCE — do NOT add a roll-forward.
+  # As-at 2026-07-01 the successor 382904 is bound in Layer_Details_v (10 layers,
+  # ~$22.4m, IsBound=1), so it flows from source automatically and pairs with the
+  # expiring 344664 by spacecraft id in the Renewals table (reprice $52m → $22.4m).
+  # A roll-forward here would DOUBLE-COUNT. (The J.Pbi snapshot still reads "NBI",
+  # a stale pointer status — the bound source layers are the source of truth.)
+  #
+  # PENDING UW SIGN-OFF — one whole-fleet renewal not yet in source (J.Pbi
+  # 2026-07-05): IsBound=0, Direct Open Market (no cession), signed=0 (no source
+  # exposure yet), every expiring layer points to the single successor. Uncomment
+  # once the UW confirms the fleet renews (as JJ did for Eutelsat) AND source is
+  # still empty — if 385466 has since bound in source, leave it commented (it will
+  # flow automatically like Arabsat did).
   # - {from_program: 343724, to_program: 385466, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", mapping_code: ASO, renewal_uw_status: "Quoted/Awaiting FOT", renewal_snapshot: "2026-07-05", reason: "Inmarsat GX fleet renewal 343724 → 385466 — pending UW sign-off; unbound (Quoted), carried at Q1 line size"}
 
 # ---- Renewal overrides -----------------------------------------------------
