@@ -75,12 +75,18 @@ renewal_rollforward:
     renewal_uw_status: "Bound (Signed Off)"
     renewal_snapshot: "2026-07-05"
     reason: "Turksat 6A renewal 341429 → 377766 — MGU split (2026-04-01→06-30, 0.5882) now added, so 377766 flows from source (~$9.12m); this is a self-retiring safety net (double-count safeguard skips it) — delete once a run confirms 377766 from source"
-  # Arabsat 344664 → 382904: NOW LIVE IN SOURCE — do NOT add a roll-forward.
-  # As-at 2026-07-01 the successor 382904 is bound in Layer_Details_v (10 layers,
-  # ~$22.4m, IsBound=1), so it flows from source automatically and pairs with the
-  # expiring 344664 by spacecraft id in the Renewals table (reprice $52m → $22.4m).
-  # A roll-forward here would DOUBLE-COUNT. (The J.Pbi snapshot still reads "NBI",
-  # a stale pointer status — the bound source layers are the source of truth.)
+  # Arabsat 344664 → 382904: CARRIED for RDS (same treatment as Inmarsat below).
+  # Although 382904 shows IsBound=1 in Layer_Details_v (~$22.4m), it does NOT flow
+  # through the extract — the live run leaves all 6 Arabsat birds in 'Renewals in
+  # progress (unbound)' pointing to 382904 (~$55.4m at Q1 line size). This is the
+  # Turksat-class gate again: a Direct Open Market successor with no matching
+  # consortium / controlling-body row is dropped by the joins, so the successor
+  # never reaches the current book. We roll the Q1 fleet forward so RDS exposure
+  # is refreshed; the spacecraft-level safeguard auto-retires it the moment 382904
+  # actually flows from source. NB source ($22.4m) < carried Q1 line ($55.4m) — the
+  # carry is conservative; reconcile the size with the UW / fix the extract gate so
+  # 382904 flows at its true bound value.
+  - {from_program: 344664, to_program: 382904, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", mapping_code: ASO, renewal_uw_status: "NBI", renewal_snapshot: "2026-07-05", reason: "Arabsat fleet renewal 344664 → 382904 — in progress / not flowing from source (Direct Open Market gate); carried for RDS at Q1 line size; auto-retires when 382904 flows from source"}
   #
   # Inmarsat GX 343724 → 385466: CARRIED for RDS. The renewal is quoted / in
   # progress but not yet bound or entered in source (J.Pbi 2026-07-05: IsBound=0,
@@ -309,6 +315,7 @@ reconciliation_notes:
   - {program_id: 328274, category: "Lapse — future renewal", date_logged: "2026Q2", note: "Spainsat NG-1 renews 2026-08-01 (after the 1-July as-at) — legitimately off the book for 2026Q2, returns in 2026Q3. Not a loss, a timing gap. NOT carried (not on-risk this quarter — carrying it would overstate)."}
   - {program_id: 334082, category: "Lapse — future renewal", date_logged: "2026Q2", note: "Spainsat NG-1 (2nd programme) — renewal 2026-08-01; off-book for Q2, returns Q3. NOT carried."}
   - {program_id: 343724, category: "Renewal — in progress, carried for RDS", date_logged: "2026Q2", note: "Inmarsat GX 343724 renews to 385466 (Quoted/Awaiting FOT). Not yet bound / not in source as-at (J.Pbi 2026-07-05: IsBound=0, signed=0), but the renewal is live — for RDS the exposure is refreshed by carrying the Q1 fleet forward via renewal_rollforward (343724 → 385466). Shows in the Renewals table, not Pending. Auto-retires (safeguard skips it) once 385466 binds in source."}
+  - {program_id: 344664, category: "Renewal — in progress, carried for RDS", date_logged: "2026Q2", note: "Arabsat 344664 renews to 382904 (6 birds, ~$55.4m at Q1 line). 382904 shows IsBound=1 in Layer_Details_v (~$22.4m) but does NOT flow through the extract — a Direct Open Market successor with no matching consortium/controlling-body row is dropped by the joins (Turksat-class gate), so all 6 birds sit in 'Renewals in progress (unbound)'. Carried forward via renewal_rollforward (344664 → 382904) so RDS exposure is refreshed; auto-retires once 382904 flows from source. NOTE: source bound value ($22.4m) < carried Q1 line ($55.4m) — reconcile size with UW / fix the extract gate."}
 
 # ---- Entities --------------------------------
 entities: ["FIHL", "FUL", "FIID", "FIBL"]
