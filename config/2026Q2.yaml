@@ -13,8 +13,17 @@ as_at_date: "2026-07-01"
 # would pollute the prior and genuine movement would net to zero.
 # Retire these two keys once a persisted pipeline run exists to compare against
 # (i.e. from 2026Q2 onward, after this quarter's run is saved).
-prior_workbook: "output/2026-04-01/Space_RDS_results_2026-04-01.xlsx"   # the FILED Q1 auto book (update path to the final Q1 run)
-prior_as_at_label: "2026-04-01 (2026Q1 auto book)"
+# PRIOR SOURCE — for FIHL to compare like-for-like on the COMBINED basis (incl
+# S3123 QS + IG equity), the prior must carry those add-ons as values:
+#   * FILED MANUAL workbook (has 'Is Consortium' + 'Inward S3123 QS' + 'Equity
+#     Share USD' as values) → EXACT prior, reproduces JJ's Change Narrative to the
+#     dollar. RECOMMENDED — point prior_workbook at the filed Q1 manual book.
+#   * AUTO results book (Per Layer S3123/equity are uncached formulas → load as 0)
+#     → prior_seed.restore_addons() recomputes them from the engine, but can't
+#     recover consortium status for prior-only lapsed spacecraft, so FIHL/FIBL
+#     land ~2% light. Recalc-save the auto book in Excel to cache the true values.
+prior_workbook: "output/2026-04-01/Space_RDS_results_2026-04-01.xlsx"   # ← point at the FILED Q1 MANUAL book for an exact prior
+prior_as_at_label: "2026-04-01 (2026Q1)"
 
 # ---- Manual inclusions -----------------------------------------------------
 # UW-confirmed single layers to carry because their renewal is not yet bound /
