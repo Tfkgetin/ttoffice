@@ -496,7 +496,7 @@ def linkify_portfolio(wb, sheet="Portfolio", per_layer="Per Layer", changes="Cha
 # --------------------------------------------------------------------------- #
 #  Changes  →  Δ and Δ% columns (current − prior)                               #
 # --------------------------------------------------------------------------- #
-def linkify_changes(wb, sheet="Changes"):
+def linkify_changes(wb, sheet="Changes", summary="Summary"):
     if sheet not in wb.sheetnames:
         return
     ws = wb[sheet]
@@ -510,6 +510,44 @@ def linkify_changes(wb, sheet="Changes"):
                 ws.cell(row=rr, column=6).value = f"=D{rr}-E{rr}"
                 ws.cell(row=rr, column=7).value = f"=IFERROR((D{rr}-E{rr})/E{rr},0)"
                 rr += 1
+
+    # De-hardcode the 'Current' column of the by-scenario blocks by linking it to
+    # the canonical Summary cascade (the current run IS Summary). 'Prior' stays a
+    # value — the prior quarter is not a workbook tab. Only cells that equal
+    # Summary are linked, so no number moves:
+    #   • Current Net  → Summary!J for every entity (net ties across the book)
+    #   • Current Gross → Summary!D for FUL / FIID only. FIHL & FIBL carry the
+    #     raw (ex-add-on / pre-receiver) gross here, which deliberately differs
+    #     from Summary's combined display, so those stay as values.
+    if summary not in wb.sheetnames:
+        return
+    bases = _summary_bases(wb[summary])
+    if "FIHL" not in bases:
+        return
+
+    def srow(ent, scen):
+        b = bases.get(ent)
+        return None if (b is None or scen not in SCEN_ORDER) else b + SCEN_ORDER.index(scen)
+
+    for r in range(1, ws.max_row + 1):
+        if not (str(ws.cell(row=r, column=2).value or "") == "Entity"
+                and str(ws.cell(row=r, column=3).value or "") == "Scenario"):
+            continue
+        d = str(ws.cell(row=r, column=4).value or "")
+        if not d.startswith("Current"):
+            continue
+        is_net = "Net" in d
+        scol = "J" if is_net else "D"
+        rr = r + 1
+        while rr <= ws.max_row:
+            ent = ws.cell(row=rr, column=2).value
+            scen = ws.cell(row=rr, column=3).value
+            sr = srow(ent, scen) if ent in bases else None
+            if sr is None:
+                break
+            if is_net or ent in ("FUL", "FIID"):
+                ws.cell(row=rr, column=4).value = f"=Summary!{scol}{sr}"
+            rr += 1
 
 
 # --------------------------------------------------------------------------- #
