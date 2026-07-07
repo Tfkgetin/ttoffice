@@ -1297,17 +1297,184 @@ def _space_weather(wb, sw, colmap):
 
 def _max_risk(wb, mr):
     ws = wb.create_sheet("Max Risk")
-    _title(ws, "Max Risk · largest layers", "per-S/C gross by layer · top 12")
+    _title(ws, "Max Risk · single largest spacecraft",
+           "Total loss of the one biggest satellite (gross = its full signed "
+           "exposure across all its layers). Never summed with other scenarios.")
+
+    # ---- Key data: the binding spacecraft + per-entity top spacecraft ----
+    # Max Risk is per-SPACECRAFT (a satellite may carry several layers), so
+    # aggregate the layer list up to the spacecraft before ranking.
+    r = 5
+    try:
+        sc = (mr.groupby("spacecraft_name")
+                .agg(gross=("gross_exposure", "sum"), net=("maxrisk_net", "sum"),
+                     entity=("entity", "first"))
+                .sort_values("gross", ascending=False))
+        top_name = sc.index[0]
+        top = sc.iloc[0]
+        r = _section(ws, r, "Key data")
+        r = _kv(ws, r, "Binding spacecraft (Max Risk)", str(top_name))
+        r = _kv(ws, r, "Gross (full signed exposure)", float(top["gross"]), money=True)
+        r = _kv(ws, r, "Net (after reinsurance)", float(top["net"]), money=True)
+        ws.cell(row=r - 1, column=4,
+                value="= total loss of this single satellite").font = F_SUB
+        # per-entity top spacecraft
+        r += 1
+        r = _hdr(ws, r, 2, ["Entity", "Top spacecraft", "Gross", "Net"],
+                 [10, 28, 16, 16])
+        for ent in ["FIHL", "FUL", "FIID", "FIBL"]:
+            sub = mr if ent == "FIHL" else mr[mr["entity"] == ent]
+            if not len(sub):
+                continue
+            g = (sub.groupby("spacecraft_name")
+                    .agg(gross=("gross_exposure", "sum"), net=("maxrisk_net", "sum"))
+                    .sort_values("gross", ascending=False))
+            nm = g.index[0]
+            _cell(ws, r, 2, ent, bold=True)
+            _cell(ws, r, 3, str(nm))
+            _cell(ws, r, 4, float(g.iloc[0]["gross"]), money=True)
+            _cell(ws, r, 5, float(g.iloc[0]["net"]), money=True)
+            r += 1
+        r += 1
+    except Exception:  # noqa: BLE001 — summary is best-effort; detail below always renders
+        r = 5
+
+    # ---- Full detail: largest layers ----
+    r = _section(ws, r, "Largest layers (top 12)")
     cols = [("spacecraft_name", "Spacecraft", 28), ("entity", "Entity", 9),
             ("program_id", "Program", 11), ("layer_id", "Layer", 9),
             ("gross_exposure", "Gross", 15), ("maxrisk_net", "Net", 15)]
     mrt = mr.sort_values("gross_exposure", ascending=False).head(12)
-    r = _hdr(ws, 5, 2, [h for _, h, _ in cols], [w for _, _, w in cols])
+    r = _hdr(ws, r, 2, [h for _, h, _ in cols], [w for _, _, w in cols])
     for k, (_, row) in enumerate(mrt.iterrows()):
         for j, (field, _, _) in enumerate(cols):
             _cell(ws, r, 2 + j, row[field], alt=k % 2 == 0,
                   money=field in ("gross_exposure", "maxrisk_net"))
         r += 1
+
+
+# --------------------------------------------------------------------------- #
+#  Change Narrative — per-scenario prior→current comparison for writing the    #
+#  quarter's narrative (mirrors JJ's manual Change Narrative tabs).            #
+# --------------------------------------------------------------------------- #
+_SCEN_DEF = {
+    "Proton Flare": "5% insured loss · GEO-GSO only · no time decay",
+    "Space Weather": "worst single bus-manufacturer · all orbits · raw gross",
+    "Generic Defect": "50% insured loss · GEO+MEO · RPF time-decayed",
+    "Space Debris": "collision damage ratio by orbit (Kessler)",
+    "Max Risk": "total loss of the single largest spacecraft",
+}
+
+
+def _change_narrative(wb, changes, per_layer, mr, sw, params):
+    """One block per scenario: entity × (current vs prior gross/net, Δ, Δ%) plus
+    the key driver and a blank Narrative column to write into — the comparison
+    JJ's manual Change Narrative tabs are built from, in one place."""
+    if not changes or "scenarios" not in changes:
+        return
+    sc = changes["scenarios"]
+    if sc is None or not len(sc):
+        return
+    ws = wb.create_sheet("Change Narrative")
+    _title(ws, "Change Narrative — write-up helper",
+           f"{params.quarter} vs {changes.get('prior_as_at', 'prior')} · per "
+           f"scenario × entity · fill the Narrative column · gross = exec basis "
+           f"(FIHL combined, FIBL receiver)")
+
+    ENTS = ["FIHL", "FUL", "FIBL", "FIID"]
+
+    def _num(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    # key drivers ------------------------------------------------------------
+    sw_top = "—"
+    try:
+        sw_top = str(sw.sort_values("sw_fihl", ascending=False).iloc[0]["bus_manufacturer"])
+    except Exception:  # noqa: BLE001
+        pass
+
+    def _mr_top(ent):
+        try:
+            g = (per_layer if ent == "FIHL" else per_layer[per_layer["entity"] == ent])
+            gg = g.groupby("spacecraft_name")["per_sc"].sum()
+            return str(gg.idxmax()) if len(gg) else "—"
+        except Exception:  # noqa: BLE001
+            return "—"
+
+    def _driver(scen, ent):
+        if scen == "Max Risk":
+            return "IGR + S3123 receiver" if ent == "FIBL" else _mr_top(ent)
+        if scen == "Space Weather":
+            return sw_top
+        return "Aggregate — all exposed policies"
+
+    r = 5
+    HEAD = ["Entity", "Key driver", "Cur Gross", "Cur Net", "Prior Gross",
+            "Prior Net", "Δ Gross", "Δ Gross %", "Δ Net", "Narrative (write here)"]
+    WID = [10, 26, 15, 15, 15, 15, 14, 10, 14, 46]
+
+    for scen in SCEN_ORDER:
+        block = sc[sc["scenario"] == scen]
+        if not len(block):
+            continue
+        r = _section(ws, r, f"{scen}")
+        ws.cell(row=r - 1, column=4, value=_SCEN_DEF.get(scen, "")).font = F_SUB
+        hdr = r
+        r = _hdr(ws, r, 2, HEAD, WID, white=True)
+        first = r
+        by_ent = {row["entity"]: row for _, row in block.iterrows()}
+        for k, ent in enumerate(ENTS):
+            row = by_ent.get(ent)
+            if row is None:
+                continue
+            alt = k % 2 == 0
+            # gross on exec basis (FIHL combined / FIBL receiver) when present
+            cg = _num(row.get("cur_gross_exec"))
+            cg = _num(row.get("cur_gross")) if cg is None else cg
+            pg = _num(row.get("prior_gross_exec"))
+            pg = _num(row.get("prior_gross")) if pg is None else pg
+            cn, pn = _num(row.get("cur_net")), _num(row.get("prior_net"))
+            _cell(ws, r, 2, ent, alt=alt, bold=True)
+            _cell(ws, r, 3, _driver(scen, ent), alt=alt)
+            _cell(ws, r, 4, cg, alt=alt, money=True)
+            _cell(ws, r, 5, cn, alt=alt, money=True)
+            _cell(ws, r, 6, pg, alt=alt, money=True)
+            _cell(ws, r, 7, pn, alt=alt, money=True)
+            # Δ live off the current/prior cells so it recomputes if edited
+            _fcell(ws, r, 8, f"=D{r}-F{r}", alt=alt, money=True,
+                   bold=(cg is not None and pg is not None and abs(cg - pg) > 1e6))
+            c9 = _fcell(ws, r, 9, f"=IFERROR((D{r}-F{r})/F{r},0)", alt=alt)
+            c9.number_format = PCT
+            _fcell(ws, r, 10, f"=E{r}-G{r}", alt=alt, money=True)
+            # Narrative cell — bordered blank for writing
+            nc = _cell(ws, r, 11, None, alt=alt)
+            nc.alignment = Alignment(wrap_text=True, vertical="top")
+            r += 1
+        # Δ% sign colour
+        _delta_signcolour(ws, f"I{first}:I{r - 1}")
+        r += 2
+
+    # Standing commentary the writer edits (seeded from the treaty terms) -------
+    r = _section(ws, r, "Reinsurance arrangements (standing — edit as needed)")
+    ri = ("External 20% QS on FUL/FIID/FIHL (risk-attaching). Internal QS FUL→FIBL "
+          "40% (2022) / 50% (2023–25); FIID→FIBL 85% all years. Internal XoL "
+          "FUL→FIBL $245m xs $50m; FIID→FIBL $72.5m xs $7.5m. Internal 20% QS "
+          "S3123→FIBL (in force since 01/07/2024).")
+    rc = ws.cell(row=r, column=2, value=ri)
+    rc.font = Font(name=_FB, size=9, color=INK)
+    rc.alignment = Alignment(wrap_text=True, vertical="top")
+    ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=11)
+    ws.row_dimensions[r].height = 56
+    r += 2
+    fc = ws.cell(row=r, column=2, value="Further commentary (write here): ")
+    fc.font = Font(name=_FB, size=9, italic=True, color=SOFT)
+    ws.merge_cells(start_row=r, start_column=2, end_row=r + 2, end_column=11)
+
+    for col, w in zip("BCDEFGHIJK", WID):
+        ws.column_dimensions[col].width = w
 
 
 def _per_layer(wb, per_layer):
@@ -3144,6 +3311,10 @@ def write_results(path, per_layer, sw, mr, grid, params, source,
         _book_movement(wb, changes)
     except Exception as _e:  # noqa: BLE001 - detail tab is non-essential
         print(f"      WARNING: Book Movement tab skipped ({_e})")
+    try:
+        _change_narrative(wb, changes, per_layer, mr, sw, params)
+    except Exception as _e:  # noqa: BLE001 - narrative helper is non-essential
+        print(f"      WARNING: Change Narrative tab skipped ({_e})")
     from . import waterfalls
     try:
         waterfalls.build_movement_waterfalls(wb, per_layer, grid, changes, params,
@@ -3174,7 +3345,8 @@ def write_results(path, per_layer, sw, mr, grid, params, source,
         del wb["Sheet"]
     order = ["Cover", "Executive Summary", "Summary", "RDS Input Template",
              "S3123 & Equity (IG)", "S3123 RDS", "Charts",
-             "Changes", "Book Movement", "WF · Exposure Bridge", "WF · Loss Movement",
+             "Changes", "Change Narrative", "Book Movement",
+             "WF · Exposure Bridge", "WF · Loss Movement",
              "Portfolio", "Netting Waterfalls", "Space Weather", "Max Risk",
              "Per Layer", "Python Adjustments", "Control",
              "Methodology", "Parameters", "Chart Data", "Audit"]
