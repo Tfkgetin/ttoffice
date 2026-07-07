@@ -512,9 +512,49 @@ def linkify_changes(wb, sheet="Changes"):
                 rr += 1
 
 
+# --------------------------------------------------------------------------- #
+#  Cover  →  Summary / Per Layer                                                #
+# --------------------------------------------------------------------------- #
+def linkify_cover(wb, sheet="Cover", summary="Summary", per_layer="Per Layer"):
+    """De-hardcode the Cover 'key facts': on-risk layers, total signed exposure
+    and the worst-case FIHL gross headline become live formulas so the cover
+    always agrees with the sheets behind it. Values sit in col C beside a col-B
+    label; located by label, so tolerant of layout shifts."""
+    if sheet not in wb.sheetnames:
+        return
+    ws = wb[sheet]
+    pl = f"'{per_layer}'"
+
+    def _val_row(label):
+        for r in range(1, ws.max_row + 1):
+            if str(ws.cell(row=r, column=2).value or "").strip() == label:
+                return r
+        return None
+
+    if per_layer in wb.sheetnames:
+        r = _val_row("On-risk layers")
+        if r:
+            ws.cell(row=r, column=3).value = f"=COUNTA({pl}!C2:C100000)"
+            ws.cell(row=r, column=3).number_format = "#,##0"
+        r = _val_row("Total signed exposure")
+        if r:
+            ws.cell(row=r, column=3).value = (
+                f'="$"&TEXT(SUM({pl}!L:L)/1000000,"#,##0.0")&"m"')
+
+    if summary in wb.sheetnames:
+        bases = _summary_bases(wb[summary])
+        fihl = bases.get("FIHL")
+        r = _val_row("Worst-case (FIHL gross)")
+        if r and fihl is not None:
+            sr = fihl + SCEN_ORDER.index("Space Weather")
+            ws.cell(row=r, column=3).value = (
+                f'="$"&TEXT(Summary!D{sr}/1000000,"#,##0.0")&"m  ·  Space Weather"')
+
+
 def linkify(wb):
     linkify_per_layer(wb)
     linkify_netting(wb)
     linkify_exec_summary(wb)
     linkify_portfolio(wb)
     linkify_changes(wb)
+    linkify_cover(wb)
