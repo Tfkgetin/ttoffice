@@ -463,9 +463,9 @@ def _binding_scenario(scen_df, entity=GROUP):
 
 def _wf_loss(wb, summary, changes, params, ref):
     ws = wb.create_sheet("WF · Loss Movement")
-    _title(ws, "Space RDS — Net Loss Movement",
-           "Scenario net loss, current vs prior run  ·  per entity  ·  "
-           "worst-case deep-dive  ·  live-linked to Changes")
+    _title(ws, "Space RDS — Loss Movement",
+           "QoQ change in scenario loss, gross & net  ·  worst-case deep-dive  ·  "
+           "per-entity detail below  ·  live-linked to Changes")
     ws.column_dimensions["A"].width = 2
 
     scen = None if not changes else changes.get("scenarios")
@@ -478,39 +478,29 @@ def _wf_loss(wb, summary, changes, params, ref):
     scen = scen.copy()
     bind = _binding_scenario(scen, GROUP)
 
-    cur = [_scen_ref(ref, "net_base", GROUP, s, "cur") for s in SCEN_ORDER]
-    prior = [_scen_ref(ref, "net_base", GROUP, s, "prior") for s in SCEN_ORDER]
     cats_flag = [f"{s}  \u25c6" if s == bind else s for s in SCEN_ORDER]
-    r = _section(ws, 5, f"All scenarios — {GROUP} net loss, current vs prior")
-    r = _clustered(ws, r, 2, "", cats_flag,
-                   [("Prior", [f"={x}" for x in prior], NAVY_LT),
-                    ("Current", [f"={x}" for x in cur], NAVY)])
-    ws.cell(row=r, column=2, value=(
-        f"\u25c6 worst-case scenario this quarter ({bind}). Scenarios are single-event "
-        "RDS views and are never summed; the worst one sets capital.")).font = F_SUB
-    r += 2
+    has_gross = ref.get("gross_base", {}).get(GROUP) is not None
 
-    # Gross levels alongside net (user 2026Q2: show BOTH gross and net). Links to
-    # the Changes 'By scenario (gross)' block when present.
-    if ref.get("gross_base", {}).get(GROUP) is not None:
-        gcur = [_scen_ref(ref, "gross_base", GROUP, s, "cur") for s in SCEN_ORDER]
-        gprior = [_scen_ref(ref, "gross_base", GROUP, s, "prior") for s in SCEN_ORDER]
-        r = _section(ws, r, f"All scenarios \u2014 {GROUP} gross loss, current vs prior")
+    # ONE movement chart — \u0394 gross AND net by scenario. The tab's whole point
+    # is the QoQ change; the levels (prior/current) live in the entity table
+    # below, so we don't repeat them as extra level charts.
+    ndel = [f"={_scen_ref(ref, 'net_base', GROUP, s, 'delta')}" for s in SCEN_ORDER]
+    r = _section(ws, 5, f"{GROUP} loss movement by scenario \u2014 \u0394 vs prior")
+    if has_gross:
+        gdel = [f"={_scen_ref(ref, 'gross_base', GROUP, s, 'delta')}" for s in SCEN_ORDER]
         r = _clustered(ws, r, 2, "", cats_flag,
-                       [("Prior", [f"={x}" for x in gprior], NAVY_LT),
-                        ("Current", [f"={x}" for x in gcur], NAVY)])
-        ws.cell(row=r, column=2, value=(
-            "Gross (pre-reinsurance) levels for the same scenarios \u2014 compare with "
-            "the net chart above to see how much the RI structure absorbs.")).font = F_SUB
-        r += 2
-
-    drefs = [f"={_scen_ref(ref, 'net_base', GROUP, s, 'delta')}" for s in SCEN_ORDER]
-    signs = []
-    for s in SCEN_ORDER:
-        row = scen[(scen["entity"] == GROUP) & (scen["scenario"] == s)]
-        signs.append(_num(row["d_net"].iloc[0]) if len(row) else None)
-    r = _delta_bars(ws, r, 2, f"All scenarios — {GROUP} \u0394 net vs prior",
-                    SCEN_ORDER, drefs, signs)
+                       [("\u0394 Gross", gdel, NAVY_LT), ("\u0394 Net", ndel, NAVY)])
+    else:
+        signs = []
+        for s in SCEN_ORDER:
+            row = scen[(scen["entity"] == GROUP) & (scen["scenario"] == s)]
+            signs.append(_num(row["d_net"].iloc[0]) if len(row) else None)
+        r = _delta_bars(ws, r, 2, "", SCEN_ORDER, ndel, signs)
+    ws.cell(row=r, column=2, value=(
+        f"\u25c6 worst-case scenario ({bind}). Positive = loss grew vs prior, "
+        "negative = shrank. Scenarios are single-event views, never summed \u2014 "
+        "the worst one sets capital.")).font = F_SUB
+    r += 2
 
     if bind:
         nb = ref["net_base"][GROUP] + SCEN_ORDER.index(bind)
