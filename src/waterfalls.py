@@ -224,8 +224,11 @@ def _waterfall_block(ws, r0, c0, heading, steps, reported_close=None,
 # --------------------------------------------------------------------------- #
 #  Composition panel: ranked table (live SUMIFS) + horizontal bar              #
 # --------------------------------------------------------------------------- #
-def _comp_panel(ws, r0, c0, title, items, total_ref):
-    """items: list of (member, exposure_formula, sort_value). Ranked desc."""
+def _comp_panel(ws, r0, c0, title, items, total_ref, chart=False):
+    """items: list of (member, exposure_formula, sort_value). Ranked desc.
+    A ranked table with a Share column reads clearly on its own, so the bar
+    chart is OFF by default (it just duplicated the table) — pass chart=True to
+    restore it for a panel that genuinely benefits from the visual."""
     items = [(k, f, float(v)) for k, f, v in items if v]
     items.sort(key=lambda x: x[2], reverse=True)
     ws.cell(row=r0, column=c0, value=title).font = F_SECT
@@ -245,6 +248,14 @@ def _comp_panel(ws, r0, c0, title, items, total_ref):
         exp = f"{_L(c0 + 1)}{first + i}"
         _fcell(ws, first + i, c0 + 2, f"=IFERROR({exp}/({total_ref}),0)", alt=alt, fmt=PCT)
     last = first + len(items) - 1
+    # in-cell data bars on the Share column give the visual ranking without a
+    # separate chart taking half the page.
+    from openpyxl.formatting.rule import DataBarRule
+    ws.conditional_formatting.add(
+        f"{_L(c0 + 2)}{first}:{_L(c0 + 2)}{last}",
+        DataBarRule(start_type="num", start_value=0, end_type="max", color="8FB0CF"))
+    if not chart:
+        return r0 + len(items) + 3
     ch = BarChart(); ch.type = "bar"; ch.height = max(4.2, 0.6 * len(items) + 1.2)
     ch.width = 11; ch.legend = None
     ch.x_axis.delete = False; ch.y_axis.delete = False; ch.y_axis.numFmt = MONEY_M
