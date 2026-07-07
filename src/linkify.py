@@ -496,7 +496,8 @@ def linkify_portfolio(wb, sheet="Portfolio", per_layer="Per Layer", changes="Cha
 # --------------------------------------------------------------------------- #
 #  Changes  →  Δ and Δ% columns (current − prior)                               #
 # --------------------------------------------------------------------------- #
-def linkify_changes(wb, sheet="Changes", summary="Summary"):
+def linkify_changes(wb, sheet="Changes", summary="Summary",
+                    per_layer="Per Layer", params="Parameters"):
     if sheet not in wb.sheetnames:
         return
     ws = wb[sheet]
@@ -548,6 +549,64 @@ def linkify_changes(wb, sheet="Changes", summary="Summary"):
             if is_net or ent in ("FUL", "FIID"):
                 ws.cell(row=rr, column=4).value = f"=Summary!{scol}{sr}"
             rr += 1
+
+    # ---- Aggregated-exposure 'Current' block → live SUMIFS on Per Layer -------
+    # The 'Prior' block stays a value (external quarter, no tab). The 'Current'
+    # block (by orbit × entity) is a live SUMIFS on Per Layer, with the derived
+    # columns built from the orbit sums (Total = GEO+MEO+LEO, GD-eligible =
+    # GEO+MEO, PF-eligible = GEO, SD orbit-weighted = GEO·dr+MEO·dr+LEO·dr from
+    # the Parameters damage ratios). Arithmetic verified against the baked values.
+    if per_layer not in wb.sheetnames:
+        return
+    PL = f"'{per_layer}'"
+    ENT, ORB, PSC = "C", "G", "L"
+    dr = {}
+    if params in wb.sheetnames:
+        pw = wb[params]
+        dr["GEO"] = _label_cell_ref(pw, "Space Debris damage ratio — GEO-GSO")
+        dr["MEO"] = _label_cell_ref(pw, "Space Debris damage ratio — MEO")
+        dr["LEO"] = _label_cell_ref(pw, "Space Debris damage ratio — LEO")
+
+    def _orb(ent, pat):
+        return (f'SUMIFS({PL}!{PSC}:{PSC},{PL}!{ENT}:{ENT},"{ent}",'
+                f'{PL}!{ORB}:{ORB},"{pat}")')
+
+    for r in range(1, ws.max_row + 1):
+        if not (str(ws.cell(row=r, column=2).value or "") == "Current"
+                and str(ws.cell(row=r, column=3).value or "") == "GEO-GSO"):
+            continue
+        rows = {}
+        rr = r + 1
+        while rr <= ws.max_row:
+            lbl = str(ws.cell(row=rr, column=2).value or "")
+            if not lbl or lbl.startswith("Δ"):
+                break
+            rows[lbl.split()[0]] = rr
+            rr += 1
+        for key, rw in rows.items():
+            if key in ("FUL", "FIID", "FIBL"):
+                ws.cell(row=rw, column=3).value = f"={_orb(key, '*GEO*')}"
+                ws.cell(row=rw, column=4).value = f"={_orb(key, '*MEO*')}"
+                ws.cell(row=rw, column=5).value = f"={_orb(key, '*LEO*')}"
+            elif key == "FIHL":                       # FIHL (FUL+FIID)
+                a, b = rows.get("FUL"), rows.get("FIID")
+                if a and b:
+                    for col in (3, 4, 5):
+                        L = _col_letter(col)
+                        ws.cell(row=rw, column=col).value = f"={L}{a}+{L}{b}"
+            elif key == "Whole":                      # Whole portfolio
+                parts = [rows.get(e) for e in ("FUL", "FIID", "FIBL") if rows.get(e)]
+                for col in (3, 4, 5):
+                    L = _col_letter(col)
+                    ws.cell(row=rw, column=col).value = "=" + "+".join(
+                        f"{L}{x}" for x in parts)
+            # derived columns (built from the orbit sums just set)
+            ws.cell(row=rw, column=6).value = f"=C{rw}+D{rw}+E{rw}"   # Total
+            ws.cell(row=rw, column=8).value = f"=C{rw}+D{rw}"         # GD eligible (GEO+MEO)
+            ws.cell(row=rw, column=9).value = f"=C{rw}"               # PF eligible (GEO)
+            if dr.get("GEO") and dr.get("MEO") and dr.get("LEO"):
+                ws.cell(row=rw, column=7).value = (
+                    f"=C{rw}*{dr['GEO']}+D{rw}*{dr['MEO']}+E{rw}*{dr['LEO']}")
 
 
 # --------------------------------------------------------------------------- #
