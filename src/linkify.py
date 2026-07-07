@@ -644,6 +644,40 @@ def linkify_changes(wb, sheet="Changes", summary="Summary",
             rr += 1
         break
 
+    # ---- Layer-movement 'New/Dropped exposure' → live ------------------------
+    # These are movement totals (they encode the prior-quarter comparison), so
+    # they have no single current-tab source. But they are fully derivable:
+    #   New exposure     = Book Movement 'New business' + 'Renewals — current'
+    #                      (a new layer-key is either genuinely new or a renewal)
+    #   Dropped exposure = prior opening + New − current book + net move
+    #                      (the exposure accounting identity — ties exactly)
+    # Both link only when Book Movement exists, so nothing can #REF.
+    def _ch_row(prefix):
+        for rr in range(1, ws.max_row + 1):
+            if str(ws.cell(row=rr, column=2).value or "").startswith(prefix):
+                return rr
+        return None
+
+    if "Book Movement" in wb.sheetnames:
+        bm = wb["Book Movement"]
+
+        def _bm_ref(needle):
+            for rr in range(1, bm.max_row + 1):
+                if needle in str(bm.cell(row=rr, column=2).value or ""):
+                    return f"'Book Movement'!C{rr}"
+            return None
+
+        nb, rc = _bm_ref("New business"), _bm_ref("current exposure")
+        r_prior = _ch_row("Prior quarter (opening)")
+        r_new = _ch_row("New exposure")
+        r_drop = _ch_row("Dropped exposure")
+        r_move = _ch_row("Net move on continuing")
+        if nb and rc and r_new:
+            ws.cell(row=r_new, column=3).value = f"={nb}+{rc}"
+        if r_prior and r_new and r_drop and r_move:
+            ws.cell(row=r_drop, column=3).value = (
+                f"=C{r_prior}+C{r_new}-SUM({L_rng})+C{r_move}")
+
 
 # --------------------------------------------------------------------------- #
 #  Cover  →  Summary / Per Layer                                                #
