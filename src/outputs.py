@@ -157,7 +157,8 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
         _wbl = _opx2.load_workbook(_fpl)
         lloyds_sheet.write_lloyds_rds_summary(
             _wbl, s3grid, as_at=str(params.as_at), sw_view=sw_view,
-            risk_appetite=appetite, prior=s3_prior)
+            risk_appetite=appetite, prior=s3_prior,
+            qoq_note=lcfg.get("qoq_note"))
         _wbl.save(_fpl)
         print("      Lloyd's RDS Summary tab written (last tab)")
 
