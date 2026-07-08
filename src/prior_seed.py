@@ -405,6 +405,12 @@ def build_changes(cur_layers: pd.DataFrame, cur_grid: pd.DataFrame,
         if "net_receiver" in g.columns:
             m = g["entity"].eq("FIBL")
             net_v[m] = g.loc[m, "net_receiver"].astype(float)
+        # FIHL headline net is COMBINED (incl S3123 QS + IG equity) to match its
+        # combined gross above; without this the net would show ex-add-on while
+        # gross shows combined — the basis mismatch that made prior net wrong.
+        if "net_incl_addons" in g.columns:
+            m = g["entity"].eq("FIHL")
+            net_v[m] = g.loc[m, "net_incl_addons"].astype(float).fillna(net_v[m])
         out = g[["entity", "scenario"]].copy()
         out[gname] = g["gross"].astype(float).values
         out[ename] = net_v.values

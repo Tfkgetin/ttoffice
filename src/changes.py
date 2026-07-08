@@ -85,9 +85,16 @@ def scenario_changes(cur_grid: pd.DataFrame, prior_grid: pd.DataFrame) -> pd.Dat
 
     def _head_net(df, entity):
         # FIBL headline net is the receiver net (matches its receiver gross);
-        # its direct-book net is ~0. FIHL/FUL/FIID keep their standard net.
+        # its direct-book net is ~0. FIHL headline net is COMBINED (incl S3123
+        # QS + IG equity) to match its combined gross — without this FIHL net
+        # would show ex-add-on against a combined gross (the basis mismatch that
+        # made prior/current net wrong). FUL/FIID keep their standard net.
         if entity == "FIBL":
             v = val(df, "net_receiver")
+            if v is not None:
+                return v
+        if entity == "FIHL":
+            v = val(df, "net_incl_addons")
             if v is not None:
                 return v
         return val(df, "net")
