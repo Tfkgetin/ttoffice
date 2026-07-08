@@ -1873,59 +1873,11 @@ def _manual_qoq_tables(ws, r, cur, pri):
     _delta_signcolour(ws, f"C{d_first}:{get_column_letter(2 + len(CO))}{r - 1}")
     r += 1
 
-    # ---- Table 1b: whole-portfolio exposure bridge by reason ----
-    if {"program_id", "layer_id", "spacecraft_id"} <= set(cur.columns) \
-            and {"program_id", "layer_id", "spacecraft_id"} <= set(pri.columns):
-        def key(df):
-            def _nid(s):   # float-safe id normalisation (SQL ids arrive float)
-                return pd.to_numeric(s, errors="coerce").astype("Int64").astype(str)
-            return (_nid(df["program_id"]) + "|" + _nid(df["layer_id"])
-                    + "|" + _nid(df["spacecraft_id"]))
-        c, p = cur.copy(), pri.copy()
-        c["_k"], p["_k"] = key(c), key(p)
-        ck, pk = set(c["_k"]), set(p["_k"])
-        new = c[c["_k"].isin(ck - pk)]
-        drp = p[p["_k"].isin(pk - ck)]
-        cont = sorted(ck & pk)
-        move = (c.set_index("_k").loc[cont, "per_sc"].groupby(level=0).sum()
-                - p.set_index("_k").loc[cont, "per_sc"].groupby(level=0).sum())
-        renew_progs = set(new["program_id"].astype(str))
-        written = float(new[~new["program_id"].astype(str)
-                        .isin(set(p["program_id"].astype(str)))]["per_sc"].sum())
-        new_on_existing = float(new["per_sc"].sum()) - written
-        drp_replaced = float(drp[drp["program_id"].astype(str)
-                             .isin(renew_progs)]["per_sc"].sum())
-        renewed = new_on_existing - drp_replaced          # net renewal move
-        expired = -float(drp[~drp["program_id"].astype(str)
-                          .isin(renew_progs)]["per_sc"].sum())
-        r = _section(ws, r, "Exposure bridge by reason (manual Table 1b)")
-        r0 = r
-        r = _kv(ws, r, "Prior quarter (opening)",
-                float(p["per_sc"].sum()), money=True)
-        r = _kv(ws, r, "New layers — new programmes", written, money=True)
-        r = _kv(ws, r, "New layers — existing programmes (net of replaced)",
-                renewed, money=True)
-        r = _kv(ws, r, "Expired without replacement", expired, money=True)
-        r = _kv(ws, r, "Moves on continuing layers", float(move.sum()), money=True)
-        cclose = ws.cell(row=r, column=2, value="Current quarter (closing)")
-        cclose.font = F_TOTAL
-        cf = ws.cell(row=r, column=3, value=f"=SUM(C{r0}:C{r - 1})")
-        cf.font = F_TOTAL; cf.number_format = MONEY
-        cf.alignment = Alignment(horizontal="right")
-        r += 1
-        r = _kv(ws, r, "Check vs current book",
-                float(c["per_sc"].sum()), money=True)
-        fn = ws.cell(row=r, column=2,
-                     value="Categories are mechanical (programme/layer ids); "
-                           "the manual's Reason column is hand-coded per layer, "
-                           "so the SPLIT differs from JJ's — the NET movement "
-                           "reconciles to the manual up to accepted data "
-                           "corrections (EUTELSAT 36D ± live drift).")
-        fn.font = Font(name=_FB, size=9, italic=True, color=SOFT)
-        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=9)
-        fn.alignment = Alignment(wrap_text=True, vertical="top")
-        ws.row_dimensions[r].height = 26
-        r += 2
+    # Table 1b (exposure bridge by reason) removed: its programme-id split counted
+    # roll-forward renewals as "expired without replacement" (renewal-blind) and
+    # duplicated the renewal-aware Portfolio exposure bridge. The Portfolio bridge
+    # (Opening → New → Renewals → Lapsed → Revaluation → Closing) is now the single
+    # source of truth for the movement walk.
 
     # ---- Table 3: RPF-adjusted exposure (GD early-warning) ----
     if "rpf" in cur.columns and "rpf" in pri.columns:

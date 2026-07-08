@@ -89,9 +89,13 @@ def _locate(wb, n_layers):
 
     if "Portfolio" in wb.sheetnames:
         p = wb["Portfolio"]
+        # Renewal-aware Portfolio bridge: Opening / +New / ↻Renewals / −Lapsed /
+        # ±Revaluation / Closing (labels are lower-case 'run-off', so match on
+        # 'Lapsed'; add the Renewals step so the waterfall ties).
         ref["p_open"] = _find_row(p, "Opening", contains=True)
         ref["p_new"] = _find_row(p, "New business", contains=True)
-        ref["p_run"] = _find_row(p, "Run-off", contains=True)
+        ref["p_ren"] = _find_row(p, "Renewals", contains=True)
+        ref["p_run"] = _find_row(p, "Lapsed", contains=True)
         ref["p_reval"] = _find_row(p, "Revaluation", contains=True)
         ref["p_close"] = _find_row(p, "Closing", contains=True)
 
@@ -341,13 +345,16 @@ def _clustered(ws, r0, c0, title, cats, series_specs, chart_h=7.0, chart_w=15.0)
 # --------------------------------------------------------------------------- #
 def _exposure_steps_linked(ref):
     pf = "Portfolio"
-    return [
-        ("Opening in-force", "prior", f"={pf}!D{ref['p_open']}", "total"),
-        ("+ New business", "written", f"={pf}!D{ref['p_new']}", "auto"),
-        ("− Run-off / expiry", "expired", f"={pf}!D{ref['p_run']}", "auto"),
+    steps = [("Opening in-force", "prior", f"={pf}!D{ref['p_open']}", "total"),
+             ("+ New business", "written", f"={pf}!D{ref['p_new']}", "auto")]
+    if ref.get("p_ren"):
+        steps.append(("↻ Renewals", "renewed", f"={pf}!D{ref['p_ren']}", "auto"))
+    steps += [
+        ("− Lapsed / run-off", "expired", f"={pf}!D{ref['p_run']}", "auto"),
         ("± Revaluation", "continuing", f"={pf}!D{ref['p_reval']}", "auto"),
         ("Closing in-force", "current", None, "total"),
     ]
+    return steps
 
 
 def _sumifs(crit_col, member, first, last):
@@ -373,14 +380,24 @@ def _wf_exposure(wb, per_layer, changes, params, ref, prior_layers=None):
     r = _waterfall_block(ws, 5, 2, "Portfolio exposure bridge ($m on-risk)",
                          _exposure_steps_linked(ref),
                          reported_close=f"=Portfolio!D{ref['p_close']}")
-    s = (changes or {}).get("layers", {}).get("summary", {})
-    if s:
-        net = float(s["new_exposure"]) - float(s["dropped_exposure"]) + float(s["net_move"])
+    L = (changes or {}).get("layers", {})
+    if L:
+        from . import renewals as _rnw
+        sp = _rnw.split_movement(L.get("new"), L.get("dropped"))
+
+        def _x(d):
+            return float(pd.to_numeric(d.get("per_sc"), errors="coerce").fillna(0).sum()) \
+                if d is not None and len(d) else 0.0
+        new_x, lap_x = _x(sp["new_biz"]), _x(sp["lapsed"])
+        renewed = _x(sp["ren_new"]) - _x(sp["ren_old"])
+        mv = float(L.get("summary", {}).get("net_move", 0.0))
+        net = new_x + renewed - lap_x + mv
         ws.cell(row=r, column=2, value=(
-            f"Read: the book {'grew' if net >= 0 else 'shrank'} {net / 1e6:,.1f}m — "
-            f"{float(s['new_exposure']) / 1e6:,.1f}m new vs "
-            f"{float(s['dropped_exposure']) / 1e6:,.1f}m run-off. Every step links to "
-            "the Portfolio bridge; green = added, red = removed, navy = level.")).font = F_SUB
+            f"Read: the book {'grew' if net >= 0 else 'shrank'} {abs(net) / 1e6:,.1f}m — "
+            f"{new_x / 1e6:,.1f}m genuine new vs {lap_x / 1e6:,.1f}m genuine run-off; "
+            "roll-forward renewals net out (not counted as run-off). Every step "
+            "links to the Portfolio bridge; green = added, red = removed, navy = level."
+            )).font = F_SUB
     r += 3
 
     first, last = ref["pl_first"], ref["pl_last"]
