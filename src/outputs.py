@@ -158,9 +158,13 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
         lloyds_sheet.write_lloyds_rds_summary(
             _wbl, s3grid, as_at=str(params.as_at), sw_view=sw_view,
             risk_appetite=appetite, prior=s3_prior,
-            qoq_note=lcfg.get("qoq_note"))
+            qoq_note=lcfg.get("qoq_note"), params=params)
+        # The computed 'S3123 RDS' tab is superseded by the Lloyd's Summary —
+        # keep it in the file (audit) but hide it from view.
+        if "S3123 RDS" in _wbl.sheetnames:
+            _wbl["S3123 RDS"].sheet_state = "hidden"
         _wbl.save(_fpl)
-        print("      Lloyd's RDS Summary tab written (last tab)")
+        print("      Lloyd's RDS Summary tab written (last tab); S3123 RDS hidden")
 
     # persist this run so future quarters can diff against it
     persist.save_run(params, per_layer, summary)
