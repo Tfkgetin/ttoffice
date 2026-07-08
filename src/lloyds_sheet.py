@@ -103,7 +103,7 @@ _JJ_ORDER = ["Proton Flare", "Space Weather", "Generic Defect",
 
 
 def write_lloyds_rds_summary(wb, grid, as_at="", sw_view=None,
-                             risk_appetite=None, prior=None):
+                             risk_appetite=None, prior=None, qoq_note=None):
     """Render the Lloyd's (S3123) RDS summary tab from the pipeline's COMPUTED
     grid (gross + net) — it does not depend on the Lloyd's SQL views, which are
     currently unreadable (a varchar->int CAST in the view dies on 'BJ-3C 01').
@@ -188,6 +188,14 @@ def write_lloyds_rds_summary(wb, grid, as_at="", sw_view=None,
                                        for s in _JJ_ORDER if s in g.index)
                     else f"Risk appetite: ${float(risk_appetite):,.0f} — one or "
                     "more RDS BREACH.").font = _f(9, False, SOFT)
+            r += 1
+        if qoq_note:
+            r += 1
+            nc = ws.cell(r, 2, "▸  " + str(qoq_note))
+            nc.font = Font(name=F, size=9, italic=True, color=SOFT)
+            nc.alignment = Alignment(wrap_text=True, vertical="top")
+            ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=9)
+            ws.row_dimensions[r].height = 56
             r += 1
     r += 2
     sw = sw_view

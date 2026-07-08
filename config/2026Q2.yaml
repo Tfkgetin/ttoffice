@@ -431,6 +431,14 @@ s3123_rds:
     rds_view:            "rds.vw_SpaceRDS_All_Lloyds_RDS"
     space_weather_view:  "rds.vw_SpaceRDS_SpaceWeather_Lloyds"
     risk_appetite_usd: 50000000              # rds.params_Risk_Appetite_Lloyds — flags breaches
+    # One-line Q-on-Q narrative rendered under the RDS table (edit per quarter).
+    qoq_note: >-
+      Q-on-Q: the S3123 consortium sub-share stepped down from 15/30 (0.500) to
+      10/30 (0.333) for inceptions on/after 2026-04-01, so the renewed GEO fleet
+      (Eutelsat / Inmarsat GX / Arabsat / Turksat, carried in at 2026-07-01) is
+      refreshed but written on the lower 0.333 syndicate line — Solar-particle
+      and Design-deficiency fall despite the renewals. Space Debris reflects LEO
+      run-off; Generic Defect the top-10 reselection. No RDS breaches appetite.
     # JJ's filed 2026Q1 Lloyd's RDS — shown as the prior column on the tab.
     previous_quarter_label: "2026Q1 (JJ filed)"
     previous_quarter:
