@@ -475,6 +475,25 @@ def linkify_portfolio(wb, sheet="Portfolio", per_layer="Per Layer", changes="Cha
                 ws.cell(row=run_r, column=4).value = f"=Changes!C{r_exp}"
             if r_mov:
                 ws.cell(row=rev_r, column=4).value = f"=Changes!C{r_mov}"
+
+            # Layers column (col C): link to the Changes 'Layer movement' counts
+            # so the count isn't an independently baked number either — same
+            # single-source treatment as the exposure column above. Run-off shows
+            # a negative (layers leaving), mirroring its exposure sign.
+            def _cr_exact(label):
+                for rr in range(1, c.max_row + 1):
+                    if str(c.cell(row=rr, column=2).value or "").strip() == label:
+                        return rr
+                return None
+            r_lnew = _cr_exact("New layers")
+            r_ldrp = _cr_exact("Dropped layers")
+            r_lmov = _cr_exact("Layers with exposure move")
+            if r_lnew:
+                ws.cell(row=new_r, column=3).value = f"=Changes!C{r_lnew}"
+            if r_ldrp:
+                ws.cell(row=run_r, column=3).value = f"=-Changes!C{r_ldrp}"
+            if r_lmov:
+                ws.cell(row=rev_r, column=3).value = f"=Changes!C{r_lmov}"
         ws.cell(row=close_r, column=4).value = f"=SUM(D{op}:D{rev_r})"
         for rr in (new_r, run_r, rev_r):
             ws.cell(row=rr, column=5).value = f"=IFERROR(D{rr}/$D${op},0)"
