@@ -165,18 +165,27 @@ def _proton(df, share, cfg):
 
 
 def _space_weather(df, share, cfg):
+    # JJ's filed basis (vw_SpaceRDS_SpaceWeather_Lloyds + the All-RDS view):
+    # for each Lloyd's bus-type group take its TOP-4 gross exposures, and the
+    # Design-Deficiency RDS is the MAX of those top-4 sums across bus types —
+    # i.e. the bus type whose four largest satellites sum highest (not the one
+    # with the largest whole-fleet aggregate).
     s = cfg["sw"]
     flag = df["on_risk_flag"] == 1
     bt = df["lloyds_bus_type"]
     valid = flag & bt.notna() & ~bt.isin(["", "None"])
-    agg = (share[valid]).groupby(bt[valid]).sum()
-    if not len(agg):
+    if not valid.any():
         return 0.0, 0.0, None, df.index[:0]
-    worst = agg.idxmax()
-    cand = share[valid & bt.eq(worst)].sort_values(ascending=False)
-    top = cand.iloc[: s.get("top_n", 4)]
-    line = top * s["loss"]
-    return line.sum(), _net(line, df, cfg), worst, line.index
+    n = s.get("top_n", 4)
+    loss = s.get("loss", 1.0)
+    best = None
+    for grp, idx in df[valid].groupby(bt[valid]).groups.items():
+        top = share.loc[idx].sort_values(ascending=False).head(n)
+        tot = float((top * loss).sum())
+        if best is None or tot > best[0]:
+            best = (tot, top.index, grp)
+    line = share.loc[best[1]] * loss
+    return line.sum(), _net(line, df, cfg), best[2], line.index
 
 
 def _generic_defect(df, share, cfg):
@@ -204,17 +213,31 @@ def _generic_defect(df, share, cfg):
 
 
 def _space_debris(df, share, cfg):
-    # Lloyd's LEO debris = share x RPF (time-decay), NOT the IG flat 0.40 DR.
-    # OPEN (recon 2026Q1, O1): JJ's 2026Q1 workings use an altitude-grouped
-    # flat basis instead — method to be agreed before this is treated as final.
+    # JJ's filed basis (vw_SpaceRDS_Space_Debris_Lloyds): 100% of all LEO
+    # satellites in the SAME orbit range (RPF-adjusted), taking the MAX across
+    # altitude groups — Group 1 = 400-800 km, Group 2 = 1200-1600 km. The
+    # per-line loss is share x RPF (100% loss ratio); the RDS is the worst
+    # single group. Needs altitude_km (ingest attaches it from the Lloyd's
+    # attributes query); falls back to all-LEO when altitude is absent.
     s = cfg["sd"]
-    scope = df["orbit"].isin(s["orbits"]) & (df["on_risk_flag"] == 1)
-    # FIX(recon 2026Q1): untangled the one-line conditional (same behaviour).
-    if s.get("apply_rpf", True):
-        line = (share * df["rpf"])[scope]
-    else:
-        line = (share * s.get("loss", 1.0))[scope]
-    return line.sum(), _net(line, df, cfg), "LEO group", line.index
+    flag = df["on_risk_flag"] == 1
+    leo = df["orbit"].isin(s["orbits"]) & flag
+    line = (share * df["rpf"]) if s.get("apply_rpf", True) \
+        else (share * s.get("loss", 1.0))
+    groups = s.get("altitude_groups")
+    if groups and "altitude_km" in df.columns:
+        alt = pd.to_numeric(df["altitude_km"], errors="coerce")
+        best = None
+        for grp in groups:
+            m = leo & alt.ge(grp["low"]) & alt.lt(grp["high"])
+            tot = float(line[m].sum())
+            if best is None or tot > best[0]:
+                best = (tot, df.index[m], grp["name"])
+        if best is not None and len(best[1]):
+            idx = best[1]
+            return line[idx].sum(), _net(line[idx], df, cfg), f"LEO {best[2]}", idx
+    # fallback: all LEO (no altitude / no groups configured)
+    return line[leo].sum(), _net(line[leo], df, cfg), "LEO (all — no altitude)", df.index[leo]
 
 
 def _max_risk(df, share, cfg):

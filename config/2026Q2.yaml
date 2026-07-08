@@ -392,7 +392,13 @@ s3123_rds:
     # sums the top-10, so that is what we mirror. (SEP validated to ~$1; GD/SD
     # tie exactly once the run reads JJ's Lloyd's population — see the sub-views.)
     generic_defect: { type: top_n_risks, top_n: 10, orbits: ["GEO-GSO", "MEO"],         loss: 0.50, apply_rpf: true }
-    space_debris:   { type: orbit_group,  orbits: ["LEO"],                              apply_rpf: true }   # share * RPF — method open (O1)
+    # JJ's filed basis: 100% of LEO in the worst orbit range (RPF-adj), MAX of
+    # the altitude groups. Group 1 = 600±200 (400-800 km), Group 2 = 1400±200
+    # (1200-1600 km) per rds.params_lloyds_proton_flare_altitude. Uses altitude_km
+    # (ingest attaches it); falls back to all-LEO if altitude is missing.
+    space_debris:   { type: orbit_group,  orbits: ["LEO"],                              apply_rpf: true,
+                      altitude_groups: [ { name: "Group 1", low: 400,  high: 800 },
+                                         { name: "Group 2", low: 1200, high: 1600 } ] }
 
   # Lloyd's population + bus type come from the Lloyd's views (same database).
   # NOTE (O1): the 2026Q1 run computed shares from the consortium-factor
@@ -403,7 +409,11 @@ s3123_rds:
   # bus-type join the SW cell renders "n/a" (it printed $0 in the shipped
   # book; the sheet now flags it instead).
   lloyds_source:
-    bus_type_view:   "rds.vw_SpaceRDS_All_Lloyds_RDS"        # layer -> Lloyds Bus Type
+    # PREFERRED: a spacecraft-keyed query (Bus Type × Bus Manufacturer -> Lloyd's
+    # bus-type group, + latest altitude). Avoids the broken vw_SpaceRDS_*_Lloyds
+    # views; drives Space Weather (bus type) and Space Debris (altitude groups).
+    spacecraft_attrs_query_file: "sql/lloyds_spacecraft_attrs.sql"
+    bus_type_view:   "rds.vw_SpaceRDS_All_Lloyds_RDS"        # (fallback; mis-named)
     population_view: "rds.vw_SpaceRDS_SpaceWeather_Lloyds"   # S3123 on-risk population
     fallback_mapping_csv: null                              # optional CSV: layer_key,lloyds_bus_type
 
@@ -420,7 +430,7 @@ s3123_rds:
     enabled: true
     rds_view:            "rds.vw_SpaceRDS_All_Lloyds_RDS"
     space_weather_view:  "rds.vw_SpaceRDS_SpaceWeather_Lloyds"
-    # risk_appetite_usd: 50000000            # set to flag RDS breaches
+    risk_appetite_usd: 50000000              # rds.params_Risk_Appetite_Lloyds — flags breaches
     # JJ's filed 2026Q1 Lloyd's RDS — shown as the prior column on the tab.
     previous_quarter_label: "2026Q1 (JJ filed)"
     previous_quarter:
