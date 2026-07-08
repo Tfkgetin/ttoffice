@@ -84,16 +84,22 @@ def _header(ws, r, cols, widths, fill=NAVY):
     return r + 1
 
 
-# pipeline scenario -> JJ's Lloyd's RDS label (Space Weather appends the worst bus)
-_JJ_LABEL = {
-    "Proton Flare": "Proton Flare",
-    "Space Weather": "Space Weather – Design Deficiency",
-    "Generic Defect": "Generic Defect",
-    "Space Debris": "Space Debris",
-    "Max Risk": "Max Risk",
+# pipeline scenario -> (JJ's Lloyd's RDS name, RDS description)
+_JJ = {
+    "Proton Flare": ("Space weather – Solar energetic particle event",
+                     "5% loss on all GEO satellites"),
+    "Space Weather": ("Space weather – Design deficiency",
+                      "Top 4 exposures on largest bus type group"),
+    "Generic Defect": ("Generic Defect",
+                       "50% loss of all exposures on largest manufacturer "
+                       "(adjusted for policy period)"),
+    "Space Debris": ("Space Debris",
+                     "100% loss of all LEO satellites in the same orbit range "
+                     "(adjusted for policy period)"),
+    "Max Risk": ("Max Risk", "Largest single spacecraft"),
 }
-_JJ_ORDER = ["Generic Defect", "Proton Flare", "Space Debris",
-             "Space Weather", "Max Risk"]
+_JJ_ORDER = ["Proton Flare", "Space Weather", "Generic Defect",
+             "Space Debris", "Max Risk"]
 
 
 def write_lloyds_rds_summary(wb, grid, as_at="", sw_view=None,
@@ -112,76 +118,76 @@ def write_lloyds_rds_summary(wb, grid, as_at="", sw_view=None,
         del wb["Lloyds RDS Summary"]
     ws = wb.create_sheet("Lloyds RDS Summary")
     ws.sheet_view.showGridLines = False
-    for col, w in zip("ABCDEFGH", [3, 52, 18, 18, 22, 20, 16, 16]):
+    for col, w in zip("ABCDEFGHI", [3, 46, 40, 15, 15, 15, 15, 14, 14]):
         ws.column_dimensions[col].width = w
 
     import pandas as _pd
     g = grid.set_index("scenario") if grid is not None and len(grid) else _pd.DataFrame()
+    prior = prior or {}
+    prior_label = prior.get("_label", "prior")
 
     r = 2
     ws.cell(r, 2, "Lloyd's RDS Summary — Syndicate 3123").font = _f(16, True, NAVY)
     r += 1
     ws.cell(r, 2, f"Space · S3123 · as at {as_at} · syndicate share, net of the "
-            f"20% QS to IG · computed in-engine").font = _f(10, False, SOFT)
+            f"20% QS to IG · computed in-engine · prior = {prior_label}"
+            ).font = _f(10, False, SOFT)
     r += 2
 
-    # ---------------- Block 1: the headline RDS (gross + net) ------------- #
+    # ---------------- Block 1: the headline RDS (gross + net vs prior) ---- #
     ws.cell(r, 2, "RDS — realistic disaster scenarios").font = _f(12, True, NAVY)
     r += 1
     if not len(g):
         r = _banner(ws, r, "No S3123 grid — enable s3123_rds in the config.")
     else:
-        has_prior = bool(prior)
-        cols = ["RDS", "Gross (USD)", "Net (USD)", "Worst / basis",
-                "Breaches risk appetite?"] \
-            + (["Prior gross", "Change"] if has_prior else [])
-        widths = [52, 18, 18, 22, 20] + ([16, 16] if has_prior else [])
-        r = _header(ws, r, cols, widths)
+        r = _header(ws, r, ["RDS Name", "RDS Description", "Gross", "Net",
+                            "Prior Gross", "Prior Net", "Δ Gross", "Δ Net"],
+                    [46, 40, 15, 15, 15, 15, 14, 14])
         for scen in _JJ_ORDER:
             if scen not in g.index:
                 continue
             row = g.loc[scen]
             detail = row.get("detail")
             has_detail = detail not in (None, "", "None") and detail == detail
-            label = _JJ_LABEL.get(scen, scen)
+            name, desc = _JJ.get(scen, (scen, ""))
             if scen == "Space Weather" and has_detail:
-                label = f"{label}: {detail}"
+                name = f"{name}: {detail}"
             gross = float(row.get("gross") or 0)
             net = row.get("net")
             unavail = (gross == 0 and not has_detail)
-            ws.cell(r, 2, label).font = _f(10, True, INK)
+            ws.cell(r, 2, name).font = _f(10, True, INK)
             ws.cell(r, 2).alignment = Alignment(wrap_text=True, vertical="top")
-            gc = ws.cell(r, 3, "n/a" if unavail else _money(gross))
+            ws.cell(r, 3, desc).font = _f(9, False, SOFT)
+            ws.cell(r, 3).alignment = Alignment(wrap_text=True, vertical="top")
+            gc = ws.cell(r, 4, "n/a" if unavail else _money(gross))
             gc.font = _f(10, False, AMBER if unavail else INK)
             gc.alignment = Alignment(horizontal="right")
-            nc = ws.cell(r, 4, "n/a" if unavail else _money(net))
+            nc = ws.cell(r, 5, "n/a" if unavail else _money(net))
             nc.font = _f(10, False, AMBER if unavail else INK)
             nc.alignment = Alignment(horizontal="right")
-            bc = ws.cell(r, 5, str(detail) if has_detail else ("—" if not unavail else "SW view blocked"))
-            bc.font = _f(10, False, SOFT)
-            if risk_appetite and not unavail:
-                breach = gross > float(risk_appetite)
-                ap = ws.cell(r, 6, "Yes" if breach else "No")
-                ap.font = _f(10, True, RED if breach else GREEN)
-                if breach:
-                    for c in range(2, 7):
-                        ws.cell(r, c).fill = _fill(REDFILL)
-            else:
-                ws.cell(r, 6, "—").font = _f(10, False, SOFT)
-            ws.cell(r, 6).alignment = Alignment(horizontal="right")
-            if has_prior:
-                pv = prior.get(scen)
-                ws.cell(r, 7, _money(pv)).alignment = Alignment(horizontal="right")
+            pr = prior.get(scen) or {}
+            pg = pr.get("gross"); pn = pr.get("net")
+            ws.cell(r, 6, _money(pg)).alignment = Alignment(horizontal="right")
+            ws.cell(r, 6).font = _f(10, False, SOFT)
+            ws.cell(r, 7, _money(pn)).alignment = Alignment(horizontal="right")
+            ws.cell(r, 7).font = _f(10, False, SOFT)
+            for c, cur, prv in ((8, gross, pg), (9, net, pn)):
                 try:
-                    d = gross - float(pv)
+                    d = None if unavail else float(cur) - float(prv)
                 except (TypeError, ValueError):
                     d = None
-                dc = ws.cell(r, 8, _money(d) if d is not None else "-")
+                dc = ws.cell(r, c, _money(d) if d is not None else "-")
                 dc.alignment = Alignment(horizontal="right")
                 dc.font = _f(10, False, GREEN if (d or 0) < 0 else RED if (d or 0) > 0 else SOFT)
-            last_c = 8 if has_prior else 6
-            for c in range(2, last_c + 1):
+            for c in range(2, 10):
                 ws.cell(r, c).border = Border(bottom=thin)
+            r += 1
+        if risk_appetite:
+            ws.cell(r, 2, f"Risk appetite: ${float(risk_appetite):,.0f} — no RDS "
+                    "breaches." if all(float(g.loc[s].get("gross") or 0) <= float(risk_appetite)
+                                       for s in _JJ_ORDER if s in g.index)
+                    else f"Risk appetite: ${float(risk_appetite):,.0f} — one or "
+                    "more RDS BREACH.").font = _f(9, False, SOFT)
             r += 1
     r += 2
     sw = sw_view
@@ -234,12 +240,17 @@ def write_lloyds_rds_summary(wb, grid, as_at="", sw_view=None,
                 ws.cell(r, c).border = Border(bottom=thin)
             r += 1
     r += 2
-    ws.cell(r, 2, "Source: the syndicate's own Lloyd's RDS views (same database "
-            "as the IG book). Methodology — Generic Defect: 50% of the largest "
-            "manufacturer's fleet (RPF-adjusted); Proton Flare: 5% of all GEO; "
-            "Space Debris – Group 1: 100% of the worst LEO altitude group "
-            "(RPF-adjusted); Space Weather – Design Deficiency: top-4 gross on "
-            "the largest bus-type group.").font = _f(9, False, SOFT)
+    ws.cell(r, 2, "Computed in-engine at the S3123 share, net of the 20% QS to "
+            "IG (3 spacecraft above the 30m IG line retain 100%). Methodology "
+            "mirrors JJ — SEP: 5% of all GEO; Design deficiency: top-4 on the "
+            "largest bus-type group; Generic Defect: 50% of the largest "
+            "manufacturer's fleet (RPF-adj); Space Debris: 100% of LEO in the "
+            "worst orbit range (RPF-adj). VALIDATED: SEP ties JJ's 2026Q1 gross "
+            "AND net to ~$1. Generic Defect / Space Debris selection and the "
+            "Design-deficiency bus type tie once the run reads JJ's Lloyd's "
+            "population (needs the bus-type + LEO-altitude fields; the "
+            "vw_SpaceRDS_*_Lloyds views currently error on a varchar→int CAST)."
+            ).font = _f(9, False, SOFT)
     ws.cell(r, 2).alignment = Alignment(wrap_text=True, vertical="top")
     ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=8)
     ws.row_dimensions[r].height = 42

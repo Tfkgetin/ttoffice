@@ -386,7 +386,11 @@ s3123_rds:
   scenarios:
     proton_flare:   { type: full,         orbits: ["GEO-GSO"],                          loss: 0.05 }
     space_weather:  { type: bus_type_top, top_n: 4,                                     loss: 1.00 }
-    generic_defect: { type: top_n_risks,  top_n: 10, orbits: ["GEO-GSO", "MEO"],        loss: 0.50, apply_rpf: true }
+    # JJ's filed basis: 50% of the LARGEST MANUFACTURER's whole fleet (RPF-adj),
+    # not top-N individual risks. (Validated: the S3123 share basis reproduces
+    # JJ's Solar-particle RDS to ~$3; GD/SD selection ties once the run reads
+    # JJ's Lloyd's population + signed shares — see lloyds_summary note.)
+    generic_defect: { type: largest_manufacturer, orbits: ["GEO-GSO", "MEO"],           loss: 0.50, apply_rpf: true }
     space_debris:   { type: orbit_group,  orbits: ["LEO"],                              apply_rpf: true }   # share * RPF — method open (O1)
 
   # Lloyd's population + bus type come from the Lloyd's views (same database).
@@ -415,6 +419,14 @@ s3123_rds:
     enabled: true
     rds_view:            "rds.vw_SpaceRDS_All_Lloyds_RDS"
     space_weather_view:  "rds.vw_SpaceRDS_SpaceWeather_Lloyds"
+    # risk_appetite_usd: 50000000            # set to flag RDS breaches
+    # JJ's filed 2026Q1 Lloyd's RDS — shown as the prior column on the tab.
+    previous_quarter_label: "2026Q1 (JJ filed)"
+    previous_quarter:
+      "Proton Flare":   { gross: 18601901, net: 15244128 }   # SEP — 5% all GEO
+      "Space Weather":  { gross: 41626793, net: 35518198 }   # Design deficiency
+      "Generic Defect": { gross: 13946588, net: 11613333 }
+      "Space Debris":   { gross: 20781208, net: 16624966 }
 
   # manual_compare: RETIRED from 2026Q2 - there is no manual book to tie to.
   # The S3123 RDS tab renders without the reconciliation block.

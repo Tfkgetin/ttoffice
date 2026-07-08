@@ -147,15 +147,12 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
         import openpyxl as _opx2
         views = ingest_mod.load_lloyds_rds_summary(params)   # may be None (view broken)
         sw_view = (views or {}).get("space_weather")
-        s3_prior = None
-        if chg and "s3123" in chg:
-            try:
-                s3_prior = {row["scenario"]: row.get("prior_gross")
-                            for _, row in chg["s3123"].iterrows()}
-            except Exception:  # noqa: BLE001
-                s3_prior = None
-        appetite = (params.raw.get("s3123_rds") or {}).get("lloyds_summary", {}) \
-            .get("risk_appetite_usd")
+        lcfg = (params.raw.get("s3123_rds") or {}).get("lloyds_summary", {})
+        # prior = JJ's filed previous-quarter RDS ({scenario: {gross, net}})
+        s3_prior = dict(lcfg.get("previous_quarter") or {})
+        if s3_prior:
+            s3_prior["_label"] = lcfg.get("previous_quarter_label", "prior")
+        appetite = lcfg.get("risk_appetite_usd")
         _fpl = str(out / f"Space_RDS_results_{params.as_at}.xlsx")
         _wbl = _opx2.load_workbook(_fpl)
         lloyds_sheet.write_lloyds_rds_summary(
