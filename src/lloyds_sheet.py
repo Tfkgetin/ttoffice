@@ -103,7 +103,7 @@ _JJ_ORDER = ["Proton Flare", "Space Weather", "Generic Defect", "Space Debris"]
 
 def write_lloyds_rds_summary(wb, grid, as_at="", sw_view=None,
                              risk_appetite=None, prior=None, qoq_note=None,
-                             params=None):
+                             params=None, change_narrative=None):
     """Render the Lloyd's (S3123) RDS summary tab from the pipeline's COMPUTED
     grid (gross + net) — it does not depend on the Lloyd's SQL views, which are
     currently unreadable (a varchar->int CAST in the view dies on 'BJ-3C 01').
@@ -198,6 +198,28 @@ def write_lloyds_rds_summary(wb, grid, as_at="", sw_view=None,
             ws.row_dimensions[r].height = 56
             r += 1
     r += 2
+
+    # ---------------- Change narrative (gross + net, per RDS) ------------ #
+    if change_narrative:
+        ws.cell(r, 2, "Change narrative — Q-on-Q gross & net").font = _f(12, True, NAVY)
+        r += 1
+        r = _header(ws, r, ["RDS", "Narrative (gross & net drivers)"], [46, 80])
+        for scen in _JJ_ORDER:
+            txt = change_narrative.get(scen)
+            if not txt:
+                continue
+            name = _JJ.get(scen, (scen, ""))[0]
+            ws.cell(r, 2, name).font = _f(10, True, INK)
+            ws.cell(r, 2).alignment = Alignment(wrap_text=True, vertical="top")
+            tc = ws.cell(r, 3, str(txt).strip()); tc.font = _f(10, False, INK)
+            tc.alignment = Alignment(wrap_text=True, vertical="top")
+            ws.merge_cells(start_row=r, start_column=3, end_row=r, end_column=9)
+            ws.row_dimensions[r].height = 70
+            for c in range(2, 10):
+                ws.cell(r, c).border = Border(bottom=thin)
+            r += 1
+        r += 2
+
     sw = sw_view
 
     # ---------- Block 2: Space Weather — design deficiency by bus type ---- #
@@ -312,5 +334,37 @@ def write_lloyds_rds_summary(wb, grid, as_at="", sw_view=None,
                  "(gross AND net) to ~$3."))
     for label, val in rows:
         _param(label, val)
+        r += 1
+
+    # ---------------- SQL sources & connections -------------------------- #
+    r += 1
+    ws.cell(r, 2, "SQL sources & connections").font = _f(12, True, NAVY)
+    r += 1
+    src = []
+    if params is not None and hasattr(params, "ingest"):
+        sq = (params.ingest or {}).get("sql", {})
+        if sq.get("server") or sq.get("database"):
+            src.append(("Server / database",
+                        f"{sq.get('server', '?')} / {sq.get('database', '?')} "
+                        f"(Windows/Trusted, ODBC Driver 17)"))
+        if sq.get("query_file"):
+            src.append(("On-risk population", f"{sq['query_file']}  "
+                        f"(body of rds.vw_SpaceRDS_OnRisk, as-at injected)"))
+        lc = (params.raw.get("s3123_rds", {}) or {}).get("lloyds_source", {})
+        if lc.get("spacecraft_attrs_query_file"):
+            src.append(("Lloyd's bus type + altitude",
+                        f"{lc['spacecraft_attrs_query_file']}  — dbo.tbl_SpaceCraft × "
+                        f"rds.params_Satellite_List_Lloyds (bus-type group); "
+                        f"[Altitude Latest (km)] for the LEO groups"))
+    src.append(("LEO altitude groups", "rds.params_lloyds_proton_flare_altitude"))
+    src.append(("Risk appetite", "rds.params_Risk_Appetite_Lloyds (dated)"))
+    src.append(("Reference (JJ's filed logic)",
+                "rds.vw_SpaceRDS_All_Lloyds_RDS + per-scenario sub-views "
+                "(vw_SpaceRDS_{Proton_Flare,Generic_Defect,Space_Debris,"
+                "SpaceWeather}_Lloyds) — currently error on a varchar→int CAST "
+                "('BJ-3C 01'); the pipeline computes in-engine and routes around them"))
+    for label, val in src:
+        _param(label, val)
+        ws.row_dimensions[r].height = 30
         r += 1
     return ws

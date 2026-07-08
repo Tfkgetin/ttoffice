@@ -158,7 +158,8 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
         lloyds_sheet.write_lloyds_rds_summary(
             _wbl, s3grid, as_at=str(params.as_at), sw_view=sw_view,
             risk_appetite=appetite, prior=s3_prior,
-            qoq_note=lcfg.get("qoq_note"), params=params)
+            qoq_note=lcfg.get("qoq_note"), params=params,
+            change_narrative=lcfg.get("change_narrative"))
         # The computed 'S3123 RDS' tab is superseded by the Lloyd's Summary —
         # keep it in the file (audit) but hide it from view.
         if "S3123 RDS" in _wbl.sheetnames:

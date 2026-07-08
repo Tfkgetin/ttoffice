@@ -439,6 +439,32 @@ s3123_rds:
       refreshed but written on the lower 0.333 syndicate line — Solar-particle
       and Design-deficiency fall despite the renewals. Space Debris reflects LEO
       run-off; Generic Defect the top-10 reselection. No RDS breaches appetite.
+    # Per-RDS change narrative (gross + net drivers) — edit per quarter.
+    change_narrative:
+      "Proton Flare": >-
+        Gross −$3.54m (−19%): the renewed GEO consortium fleet (Eutelsat, Inmarsat
+        GX, Arabsat, Turksat) is carried in on the reduced 10/30 (0.333) S3123
+        sub-share vs 15/30 (0.500) last quarter — the same fleet writes a smaller
+        syndicate line. Net −$3.13m (−21%): net falls a little further than gross
+        as excluded, 100%-retained birds (chiefly Spainsat NG-1, which renews
+        1-Aug and is off-book this quarter) leave the population, so the 20% QS to
+        IG bites more fully (net/gross 0.82 → 0.80).
+      "Space Weather": >-
+        Gross −$6.03m (−14%): binding bus type unchanged (Airbus Eurostar
+        3000/NEO); the top-4 exposures fall on the same 0.500 → 0.333 share
+        step-down. Net −$7.04m (−20%): net drops further as the previously
+        100%-retained excluded birds leave the top-4, so the 20% QS applies more
+        fully (net/gross 0.85 → 0.80).
+      "Generic Defect": >-
+        Gross +$2.37m (+17%): the top-10 GEO/MEO losses reselect — renewed and
+        added GEO exposure and the RPF profile push larger risks into the top-10,
+        outweighing the lower share. Net +$1.70m (+15%): net rises broadly in line
+        with gross at ~0.82 retention.
+      "Space Debris": >-
+        Gross −$7.45m (−36%): LEO run-off — WorldView / Maxar Legion re-attach to
+        the in-orbit fleet elsewhere and other LEO layers expire, shrinking the
+        worst orbit-range group (Group 1). Net −$5.96m (−36%): net moves in line
+        with gross at the full 20% QS (no excluded LEO birds).
     # JJ's filed 2026Q1 Lloyd's RDS — shown as the prior column on the tab.
     previous_quarter_label: "2026Q1 (JJ filed)"
     previous_quarter:
