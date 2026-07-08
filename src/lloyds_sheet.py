@@ -84,74 +84,107 @@ def _header(ws, r, cols, widths, fill=NAVY):
     return r + 1
 
 
-def write_lloyds_rds_summary(wb, data, as_at="", prior=None):
-    """data = {'rds': df|None, 'space_weather': df|None} from
-    ingest.load_lloyds_rds_summary. `prior` (optional) = a prior-quarter
-    {RDS_Name: RDS_Value} dict for the Change-vs-Last-Quarter column."""
+# pipeline scenario -> JJ's Lloyd's RDS label (Space Weather appends the worst bus)
+_JJ_LABEL = {
+    "Proton Flare": "Proton Flare",
+    "Space Weather": "Space Weather – Design Deficiency",
+    "Generic Defect": "Generic Defect",
+    "Space Debris": "Space Debris",
+    "Max Risk": "Max Risk",
+}
+_JJ_ORDER = ["Generic Defect", "Proton Flare", "Space Debris",
+             "Space Weather", "Max Risk"]
+
+
+def write_lloyds_rds_summary(wb, grid, as_at="", sw_view=None,
+                             risk_appetite=None, prior=None):
+    """Render the Lloyd's (S3123) RDS summary tab from the pipeline's COMPUTED
+    grid (gross + net) — it does not depend on the Lloyd's SQL views, which are
+    currently unreadable (a varchar->int CAST in the view dies on 'BJ-3C 01').
+
+      grid          : DataFrame with scenario / detail / gross / net (s3123.grid)
+      sw_view       : optional DataFrame from vw_SpaceRDS_SpaceWeather_Lloyds for
+                      the bus-type block; None -> a banner explains it's blocked.
+      risk_appetite : optional USD threshold; RDS gross above it flags a breach.
+      prior         : optional {scenario: gross} for a Q-on-Q change column.
+    """
     if "Lloyds RDS Summary" in wb.sheetnames:
         del wb["Lloyds RDS Summary"]
     ws = wb.create_sheet("Lloyds RDS Summary")
     ws.sheet_view.showGridLines = False
-    for col, w in zip("ABCDEFGH", [3, 60, 22, 26, 18, 16, 16, 20]):
+    for col, w in zip("ABCDEFGH", [3, 52, 18, 18, 22, 20, 16, 16]):
         ws.column_dimensions[col].width = w
+
+    import pandas as _pd
+    g = grid.set_index("scenario") if grid is not None and len(grid) else _pd.DataFrame()
 
     r = 2
     ws.cell(r, 2, "Lloyd's RDS Summary — Syndicate 3123").font = _f(16, True, NAVY)
     r += 1
-    ws.cell(r, 2, f"Space · S3123 · as at {as_at} · from "
-            f"rds.vw_SpaceRDS_All_Lloyds_RDS / vw_SpaceRDS_SpaceWeather_Lloyds"
-            ).font = _f(10, False, SOFT)
+    ws.cell(r, 2, f"Space · S3123 · as at {as_at} · syndicate share, net of the "
+            f"20% QS to IG · computed in-engine").font = _f(10, False, SOFT)
     r += 2
 
-    rds = (data or {}).get("rds")
-    sw = (data or {}).get("space_weather")
-
-    # ---------------- Block 1: the four headline RDS ---------------------- #
+    # ---------------- Block 1: the headline RDS (gross + net) ------------- #
     ws.cell(r, 2, "RDS — realistic disaster scenarios").font = _f(12, True, NAVY)
     r += 1
-    if rds is None or not len(rds):
-        r = _banner(ws, r, "vw_SpaceRDS_All_Lloyds_RDS returned no rows — the "
-                    "view is not configured or not reachable from this login. "
-                    "Set s3123_rds.lloyds_summary.rds_view and re-run on SQL.")
+    if not len(g):
+        r = _banner(ws, r, "No S3123 grid — enable s3123_rds in the config.")
     else:
-        c_name = _pick(rds, "RDS_Name") or rds.columns[0]
-        c_val = _pick(rds, "RDS_Value") or rds.columns[1]
-        c_brk = _pick(rds, "Breaches_Risk_Appetite", "BreachesRiskAppetite")
         has_prior = bool(prior)
-        cols = ["RDS", "RDS Value (USD)", "Breaches risk appetite?"] \
-            + (["Last quarter (USD)", "Change (USD)"] if has_prior else [])
-        widths = [60, 22, 20] + ([18, 16] if has_prior else [])
+        cols = ["RDS", "Gross (USD)", "Net (USD)", "Worst / basis",
+                "Breaches risk appetite?"] \
+            + (["Prior gross", "Change"] if has_prior else [])
+        widths = [52, 18, 18, 22, 20] + ([16, 16] if has_prior else [])
         r = _header(ws, r, cols, widths)
-        for _, row in rds.iterrows():
-            name = row[c_name]
-            ws.cell(r, 2, str(name)).font = _f(10, True, INK)
+        for scen in _JJ_ORDER:
+            if scen not in g.index:
+                continue
+            row = g.loc[scen]
+            detail = row.get("detail")
+            has_detail = detail not in (None, "", "None") and detail == detail
+            label = _JJ_LABEL.get(scen, scen)
+            if scen == "Space Weather" and has_detail:
+                label = f"{label}: {detail}"
+            gross = float(row.get("gross") or 0)
+            net = row.get("net")
+            unavail = (gross == 0 and not has_detail)
+            ws.cell(r, 2, label).font = _f(10, True, INK)
             ws.cell(r, 2).alignment = Alignment(wrap_text=True, vertical="top")
-            vc = ws.cell(r, 3, _money(row[c_val]))
-            vc.font = _f(10, False, INK)
-            vc.alignment = Alignment(horizontal="right")
-            breach = _is_yes(row[c_brk]) if c_brk else False
-            bc = ws.cell(r, 4, "Yes" if breach else "No")
-            bc.font = _f(10, True, RED if breach else GREEN)
-            bc.alignment = Alignment(horizontal="right")
-            if breach:
-                for c in range(2, 5):
-                    ws.cell(r, c).fill = _fill(REDFILL)
+            gc = ws.cell(r, 3, "n/a" if unavail else _money(gross))
+            gc.font = _f(10, False, AMBER if unavail else INK)
+            gc.alignment = Alignment(horizontal="right")
+            nc = ws.cell(r, 4, "n/a" if unavail else _money(net))
+            nc.font = _f(10, False, AMBER if unavail else INK)
+            nc.alignment = Alignment(horizontal="right")
+            bc = ws.cell(r, 5, str(detail) if has_detail else ("—" if not unavail else "SW view blocked"))
+            bc.font = _f(10, False, SOFT)
+            if risk_appetite and not unavail:
+                breach = gross > float(risk_appetite)
+                ap = ws.cell(r, 6, "Yes" if breach else "No")
+                ap.font = _f(10, True, RED if breach else GREEN)
+                if breach:
+                    for c in range(2, 7):
+                        ws.cell(r, c).fill = _fill(REDFILL)
+            else:
+                ws.cell(r, 6, "—").font = _f(10, False, SOFT)
+            ws.cell(r, 6).alignment = Alignment(horizontal="right")
             if has_prior:
-                pv = prior.get(str(name))
-                pc = ws.cell(r, 5, _money(pv)); pc.font = _f(10, False, SOFT)
-                pc.alignment = Alignment(horizontal="right")
+                pv = prior.get(scen)
+                ws.cell(r, 7, _money(pv)).alignment = Alignment(horizontal="right")
                 try:
-                    d = float(row[c_val]) - float(pv)
+                    d = gross - float(pv)
                 except (TypeError, ValueError):
                     d = None
-                dc = ws.cell(r, 6, _money(d) if d is not None else "-")
+                dc = ws.cell(r, 8, _money(d) if d is not None else "-")
                 dc.alignment = Alignment(horizontal="right")
                 dc.font = _f(10, False, GREEN if (d or 0) < 0 else RED if (d or 0) > 0 else SOFT)
-            last_c = 6 if has_prior else 4
+            last_c = 8 if has_prior else 6
             for c in range(2, last_c + 1):
                 ws.cell(r, c).border = Border(bottom=thin)
             r += 1
     r += 2
+    sw = sw_view
 
     # ---------- Block 2: Space Weather — design deficiency by bus type ---- #
     ws.cell(r, 2, "Space Weather — design deficiency by satellite bus type"
@@ -161,9 +194,10 @@ def write_lloyds_rds_summary(wb, data, as_at="", prior=None):
             "Design Deficiency RDS above.").font = _f(9, False, SOFT)
     r += 1
     if sw is None or not len(sw):
-        r = _banner(ws, r, "vw_SpaceRDS_SpaceWeather_Lloyds returned no rows — "
-                    "set s3123_rds.lloyds_summary.space_weather_view and re-run "
-                    "on SQL.")
+        r = _banner(ws, r, "Bus-type detail unavailable: vw_SpaceRDS_SpaceWeather_"
+                    "Lloyds currently errors in SQL (varchar→int CAST fails on "
+                    "spacecraft 'BJ-3C 01'). Fix the view / the offending row and "
+                    "re-run; the Space Weather RDS above then populates too.")
     else:
         c_bus = _pick(sw, "Lloyds Satellite Bus Type List", "LloydsSatelliteBusTypeList",
                       "BusType") or sw.columns[0]

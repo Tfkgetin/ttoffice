@@ -136,16 +136,31 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
             _wb, s3grid, rec, as_at=str(params.as_at), qoq=s3_qoq)
         _wb.save(_fp)
 
-    # Lloyd's RDS Summary (JJ's filed deliverable) — read the two DB views and
-    # render as the workbook's LAST tab. Added after every other sheet so it
-    # lands last; degrades to a visible banner if the views aren't reachable.
-    lloyds = ingest_mod.load_lloyds_rds_summary(params)
-    if lloyds:
+    # Lloyd's RDS Summary (JJ's filed deliverable) — the workbook's LAST tab.
+    # Rendered from the pipeline's COMPUTED S3123 grid (gross + net), so it does
+    # not depend on the Lloyd's SQL views (which currently error in SQL). The
+    # bus-type block is enriched from vw_SpaceRDS_SpaceWeather_Lloyds when that
+    # view is readable; otherwise it shows a banner. Added after every other
+    # sheet so it lands last.
+    if s3grid is not None and (params.raw.get("s3123_rds") or {}).get("enabled"):
         from . import lloyds_sheet
         import openpyxl as _opx2
+        views = ingest_mod.load_lloyds_rds_summary(params)   # may be None (view broken)
+        sw_view = (views or {}).get("space_weather")
+        s3_prior = None
+        if chg and "s3123" in chg:
+            try:
+                s3_prior = {row["scenario"]: row.get("prior_gross")
+                            for _, row in chg["s3123"].iterrows()}
+            except Exception:  # noqa: BLE001
+                s3_prior = None
+        appetite = (params.raw.get("s3123_rds") or {}).get("lloyds_summary", {}) \
+            .get("risk_appetite_usd")
         _fpl = str(out / f"Space_RDS_results_{params.as_at}.xlsx")
         _wbl = _opx2.load_workbook(_fpl)
-        lloyds_sheet.write_lloyds_rds_summary(_wbl, lloyds, as_at=str(params.as_at))
+        lloyds_sheet.write_lloyds_rds_summary(
+            _wbl, s3grid, as_at=str(params.as_at), sw_view=sw_view,
+            risk_appetite=appetite, prior=s3_prior)
         _wbl.save(_fpl)
         print("      Lloyd's RDS Summary tab written (last tab)")
 
