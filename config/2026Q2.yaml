@@ -402,5 +402,19 @@ s3123_rds:
     population_view: "rds.vw_SpaceRDS_SpaceWeather_Lloyds"   # S3123 on-risk population
     fallback_mapping_csv: null                              # optional CSV: layer_key,lloyds_bus_type
 
+  # Lloyd's RDS Summary — JJ's filed deliverable, integrated as the workbook's
+  # LAST tab. The RDS methodology lives in these two pre-computed DB views, so
+  # the tab reads them verbatim and ties to his 'Lloyds RDS Summary-final' to
+  # the dollar (no re-derivation). rds_view = the 4 headline RDS
+  # (RDS_Name / RDS_Value / Breaches_Risk_Appetite); space_weather_view = the
+  # bus-type block (Bus Type / Aggregate / Top 4 / > Risk Appetite).
+  # NB these are the CORRECT view roles — `lloyds_source.bus_type_view` above is
+  # mis-named (it points at the 4-RDS summary, not a layer->bus-type map, which
+  # is why Space Weather on the computed S3123 tab renders n/a).
+  lloyds_summary:
+    enabled: true
+    rds_view:            "rds.vw_SpaceRDS_All_Lloyds_RDS"
+    space_weather_view:  "rds.vw_SpaceRDS_SpaceWeather_Lloyds"
+
   # manual_compare: RETIRED from 2026Q2 - there is no manual book to tie to.
   # The S3123 RDS tab renders without the reconciliation block.
