@@ -60,3 +60,17 @@ WHERE TABLE_NAME = 'tbl_SpaceCraft'
 SELECT * FROM SpaceTrax_Data.rds.param_lloyds_risk_appetite;   -- if this name is wrong:
 -- SELECT s.name+'.'+t.name FROM sys.tables t JOIN sys.schemas s ON s.schema_id=t.schema_id
 -- WHERE t.name LIKE '%appetite%' OR t.name LIKE '%risk_app%';
+
+/* ===================================================================
+   ROUND 2 — the 4 sub-views behind vw_SpaceRDS_All_Lloyds_RDS.
+   These give the exact GD top-10 formula, the SD altitude grouping +
+   its altitude source, the SW bus-type join (and the CAST bug), and
+   confirm PF. Paste all four definitions.
+   =================================================================== */
+SELECT OBJECT_DEFINITION(OBJECT_ID('rds.vw_SpaceRDS_Generic_Defect_Lloyds')) AS generic_defect_sql;
+SELECT OBJECT_DEFINITION(OBJECT_ID('rds.vw_SpaceRDS_Space_Debris_Lloyds'))   AS space_debris_sql;
+SELECT OBJECT_DEFINITION(OBJECT_ID('rds.vw_SpaceRDS_SpaceWeather_Lloyds'))   AS space_weather_sql;
+SELECT OBJECT_DEFINITION(OBJECT_ID('rds.vw_SpaceRDS_Proton_Flare_Lloyds'))   AS proton_flare_sql;
+
+-- risk-appetite threshold (dated) — for the breach flags:
+SELECT * FROM SpaceTrax_Data.rds.params_Risk_Appetite_Lloyds;
