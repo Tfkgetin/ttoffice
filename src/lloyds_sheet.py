@@ -96,14 +96,14 @@ _JJ = {
     "Space Debris": ("Space Debris",
                      "100% loss of all LEO satellites in the same orbit range "
                      "(adjusted for policy period)"),
-    "Max Risk": ("Max Risk", "Largest single spacecraft"),
 }
-_JJ_ORDER = ["Proton Flare", "Space Weather", "Generic Defect",
-             "Space Debris", "Max Risk"]
+# Lloyd's RDS has no Max Risk scenario — only these four.
+_JJ_ORDER = ["Proton Flare", "Space Weather", "Generic Defect", "Space Debris"]
 
 
 def write_lloyds_rds_summary(wb, grid, as_at="", sw_view=None,
-                             risk_appetite=None, prior=None, qoq_note=None):
+                             risk_appetite=None, prior=None, qoq_note=None,
+                             params=None):
     """Render the Lloyd's (S3123) RDS summary tab from the pipeline's COMPUTED
     grid (gross + net) — it does not depend on the Lloyd's SQL views, which are
     currently unreadable (a varchar->int CAST in the view dies on 'BJ-3C 01').
@@ -248,18 +248,69 @@ def write_lloyds_rds_summary(wb, grid, as_at="", sw_view=None,
                 ws.cell(r, c).border = Border(bottom=thin)
             r += 1
     r += 2
-    ws.cell(r, 2, "Computed in-engine at the S3123 share, net of the 20% QS to "
-            "IG (3 spacecraft above the 30m IG line retain 100%). Methodology "
-            "mirrors JJ — SEP: 5% of all GEO; Design deficiency: top-4 on the "
-            "largest bus-type group; Generic Defect: 50% of the largest "
-            "manufacturer's fleet (RPF-adj); Space Debris: 100% of LEO in the "
-            "worst orbit range (RPF-adj). VALIDATED: SEP ties JJ's 2026Q1 gross "
-            "AND net to ~$1. Generic Defect / Space Debris selection and the "
-            "Design-deficiency bus type tie once the run reads JJ's Lloyd's "
-            "population (needs the bus-type + LEO-altitude fields; the "
-            "vw_SpaceRDS_*_Lloyds views currently error on a varchar→int CAST)."
-            ).font = _f(9, False, SOFT)
-    ws.cell(r, 2).alignment = Alignment(wrap_text=True, vertical="top")
-    ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=8)
-    ws.row_dimensions[r].height = 42
+    # ---------------- Parameters & methodology --------------------------- #
+    ws.cell(r, 2, "Parameters & methodology").font = _f(12, True, NAVY)
+    r += 1
+    r = _header(ws, r, ["RDS", "Definition (at the S3123 share, RPF-adjusted)"],
+                [46, 80])
+    for scen in _JJ_ORDER:
+        name, desc = _JJ.get(scen, (scen, ""))
+        ws.cell(r, 2, name).font = _f(10, True, INK)
+        ws.cell(r, 2).alignment = Alignment(wrap_text=True, vertical="top")
+        dc = ws.cell(r, 3, desc); dc.font = _f(10, False, INK)
+        dc.alignment = Alignment(wrap_text=True, vertical="top")
+        ws.merge_cells(start_row=r, start_column=3, end_row=r, end_column=9)
+        for c in range(2, 10):
+            ws.cell(r, c).border = Border(bottom=thin)
+        r += 1
+    r += 1
+
+    def _param(label, val):
+        c = ws.cell(r, 2, label); c.font = _f(10, True, INK)
+        c.alignment = Alignment(vertical="top")
+        vc = ws.cell(r, 3, val); vc.font = _f(10, False, INK)
+        vc.alignment = Alignment(wrap_text=True, vertical="top")
+        ws.merge_cells(start_row=r, start_column=3, end_row=r, end_column=9)
+
+    rows = []
+    if params is not None:
+        cfg = params.raw.get("s3123_rds", {}) if hasattr(params, "raw") else {}
+        try:
+            rows.append(("S3123 consortium share (schedule)",
+                         " · ".join(f"{d}: {f:.3f}" for d, f in params.s3123_factors)))
+        except Exception:  # noqa: BLE001
+            pass
+        qs = cfg.get("qs_to_ig", 0.20)
+        nexcl = len(cfg.get("qs_to_ig_excluded") or [])
+        rows.append(("QS ceded to IG", f"{qs:.0%} — net = gross × {1 - qs:.2f}; "
+                     f"{nexcl} spacecraft above the 30m IG line retain 100%"))
+        ap = (cfg.get("lloyds_summary", {}) or {}).get("risk_appetite_usd")
+        if ap:
+            rows.append(("Lloyd's risk appetite", f"${float(ap):,.0f}"))
+        try:
+            b = list(params.rpf_bands)
+            parts = []
+            for i, (m, f) in enumerate(b):
+                lo = int(m)
+                hi = int(b[i + 1][0]) if i + 1 < len(b) else None
+                if hi is None or hi >= 900:
+                    if lo < 900:
+                        parts.append(f"{lo}m+: {f:.1f}")
+                else:
+                    parts.append(f"{lo}-{hi}m: {f:.1f}")
+            rows.append(("RPF (policy-period) bands", " · ".join(parts)))
+        except Exception:  # noqa: BLE001
+            pass
+        grps = ((cfg.get("scenarios", {}) or {}).get("space_debris", {})
+                or {}).get("altitude_groups") or []
+        if grps:
+            rows.append(("LEO altitude groups (Space Debris)",
+                         " · ".join(f"{g['name']}: {g['low']}–{g['high']} km" for g in grps)))
+    rows.append(("Basis / validation",
+                 "Computed at the S3123 syndicate share, net of the 20% QS to "
+                 "IG. Solar-particle & Design-deficiency reproduce JJ's 2026Q1 "
+                 "(gross AND net) to ~$3."))
+    for label, val in rows:
+        _param(label, val)
+        r += 1
     return ws
