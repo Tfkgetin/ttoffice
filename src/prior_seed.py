@@ -392,14 +392,22 @@ def build_changes(cur_layers: pd.DataFrame, cur_grid: pd.DataFrame,
     def _with_exec(g, gname, ename):
         g = g.copy()
         exec_g = g["gross"].astype(float).copy()
+        net_v = g["net"].astype(float).copy()
         if "gross_incl_addons" in g.columns:
             m = g["entity"].eq("FIHL")
             exec_g[m] = g.loc[m, "gross_incl_addons"].astype(float)
         if "gross_receiver" in g.columns:
             m = g["entity"].eq("FIBL")
             exec_g[m] = g.loc[m, "gross_receiver"].astype(float)
-        out = g[["entity", "scenario", "gross", "net"]].rename(
-            columns={"gross": gname, "net": ename})
+        # FIBL headline net is the RECEIVER net (matches its receiver gross); its
+        # direct-book "net" is ~0 for internally-ceded birds and would misreport
+        # the receiver row (e.g. Max Risk SPAINSAT NG-2 net would show 0).
+        if "net_receiver" in g.columns:
+            m = g["entity"].eq("FIBL")
+            net_v[m] = g.loc[m, "net_receiver"].astype(float)
+        out = g[["entity", "scenario"]].copy()
+        out[gname] = g["gross"].astype(float).values
+        out[ename] = net_v.values
         out[gname + "_exec"] = exec_g.values
         return out
     c = _with_exec(cur_grid, "cur_gross", "cur_net")

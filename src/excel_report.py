@@ -1295,7 +1295,7 @@ def _space_weather(wb, sw, colmap):
                   "on-risk orbits, raw gross per-S/C (before equity/netting).").font = F_SUB
 
 
-def _max_risk(wb, mr):
+def _max_risk(wb, mr, grid=None):
     ws = wb.create_sheet("Max Risk")
     _title(ws, "Max Risk · single largest spacecraft",
            "Total loss of the one biggest satellite (gross = its full signed "
@@ -1322,7 +1322,29 @@ def _max_risk(wb, mr):
         r += 1
         r = _hdr(ws, r, 2, ["Entity", "Top spacecraft", "Gross", "Net"],
                  [10, 28, 16, 16])
+        # FIBL is the internal RI receiver — its Max Risk is the bird it RECEIVES
+        # the most on (IGR QS + S3123 + equity + direct), taken from the netting
+        # grid's receiver basis, NOT its thin direct book. Matches Summary /
+        # Change Narrative.
+        fibl_recv = None
+        try:
+            if grid is not None:
+                gr = grid[(grid["entity"] == "FIBL") & (grid["scenario"] == "Max Risk")]
+                if len(gr):
+                    gr = gr.iloc[0]
+                    fibl_recv = (str(gr.get("detail")),
+                                 float(gr.get("gross_receiver")),
+                                 float(gr.get("net_receiver")))
+        except Exception:  # noqa: BLE001
+            fibl_recv = None
         for ent in ["FIHL", "FUL", "FIID", "FIBL"]:
+            if ent == "FIBL" and fibl_recv is not None:
+                _cell(ws, r, 2, ent, bold=True)
+                _cell(ws, r, 3, fibl_recv[0])
+                _cell(ws, r, 4, fibl_recv[1], money=True)
+                _cell(ws, r, 5, fibl_recv[2], money=True)
+                r += 1
+                continue
             sub = mr if ent == "FIHL" else mr[mr["entity"] == ent]
             if not len(sub):
                 continue
@@ -1334,6 +1356,12 @@ def _max_risk(wb, mr):
             _cell(ws, r, 3, str(nm))
             _cell(ws, r, 4, float(g.iloc[0]["gross"]), money=True)
             _cell(ws, r, 5, float(g.iloc[0]["net"]), money=True)
+            r += 1
+        if fibl_recv is not None:
+            ws.cell(row=r, column=2,
+                    value="FIBL is the internal RI receiver: its Max Risk is what "
+                          "it receives on the most-ceded single bird (IGR QS + "
+                          "S3123 + equity), not its direct book.").font = F_SUB
             r += 1
         r += 1
     except Exception:  # noqa: BLE001 — summary is best-effort; detail below always renders
@@ -1404,9 +1432,21 @@ def _change_narrative(wb, changes, per_layer, mr, sw, params):
         except Exception:  # noqa: BLE001
             return "—"
 
+    # FIBL Max Risk is the single bird FIBL RECEIVES the most on (receiver
+    # basis), not the group's largest-gross bird — name it in the driver.
+    fibl_mr_top = "—"
+    try:
+        from . import netting as _net
+        _, fibl_mr_top = _net.fibl_maxrisk_multiplier(per_layer)
+        fibl_mr_top = str(fibl_mr_top) if fibl_mr_top else "—"
+    except Exception:  # noqa: BLE001
+        pass
+
     def _driver(scen, ent):
         if scen == "Max Risk":
-            return "IGR + S3123 receiver" if ent == "FIBL" else _mr_top(ent)
+            if ent == "FIBL":
+                return f"IGR + S3123 receiver ({fibl_mr_top})"
+            return _mr_top(ent)
         if scen == "Space Weather":
             return sw_top
         return "Aggregate — all exposed policies"
@@ -3270,9 +3310,12 @@ def _s3123_ig_addons(wb, grid, params):
                  "column on the Summary."),
         ("FIBL", "RECEIVER — QS received (from FUL+FIID) + XoL received + FIBL "
                  "direct book + S3123 QS to IG + IG equity. Matches the manual "
-                 "Change Narrative FIBL rows. (Manual Max Risk carries a "
-                 "hand-keyed add of ~10.1m with no formula support; the "
-                 "pipeline's figure is the clean QS-received number.)"),
+                 "Change Narrative FIBL rows. Max Risk = the single bird FIBL "
+                 "RECEIVES the most on (SPAINSAT NG-2, ~21.4m); every component "
+                 "is that one bird's own cession — a coherent single-satellite "
+                 "loss (Basis B, UW-confirmed). The filed 2026Q1 manual keyed "
+                 "~22.9m by stitching a different bird's larger IGR (SPAINSAT "
+                 "NG-1) onto NG-2's S3123/equity — not a single loss; superseded."),
         ("FUL / FIID", "Operating entities — standard cede-down cascade (Gross "
                        "-> Ext QS -> IGR QS -> XoL -> Net). No IG add-ons apply, "
                        "so combined = ex here."),
@@ -3357,7 +3400,7 @@ def write_results(path, per_layer, sw, mr, grid, params, source,
     _parameters(wb, params)
     _waterfalls(wb, grid)
     _space_weather(wb, sw, colmap)
-    _max_risk(wb, mr)
+    _max_risk(wb, mr, grid)
     _python_adjustments(wb, per_layer, excluded, corrections, params,
                         manual_includes=manual_includes)
     _methodology(wb, params, changes)
