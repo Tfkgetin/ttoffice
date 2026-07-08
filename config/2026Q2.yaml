@@ -386,11 +386,12 @@ s3123_rds:
   scenarios:
     proton_flare:   { type: full,         orbits: ["GEO-GSO"],                          loss: 0.05 }
     space_weather:  { type: bus_type_top, top_n: 4,                                     loss: 1.00 }
-    # JJ's filed basis: 50% of the LARGEST MANUFACTURER's whole fleet (RPF-adj),
-    # not top-N individual risks. (Validated: the S3123 share basis reproduces
-    # JJ's Solar-particle RDS to ~$3; GD/SD selection ties once the run reads
-    # JJ's Lloyd's population + signed shares — see lloyds_summary note.)
-    generic_defect: { type: largest_manufacturer, orbits: ["GEO-GSO", "MEO"],           loss: 0.50, apply_rpf: true }
+    # JJ's FILED basis (per vw_SpaceRDS_Generic_Defect_Lloyds): sum of the TOP 10
+    # satellite losses = exposure x risk_factor(RPF) x loss_rate(0.50). His
+    # Change-Narrative wording ("largest manufacturer") is misleading — the view
+    # sums the top-10, so that is what we mirror. (SEP validated to ~$1; GD/SD
+    # tie exactly once the run reads JJ's Lloyd's population — see the sub-views.)
+    generic_defect: { type: top_n_risks, top_n: 10, orbits: ["GEO-GSO", "MEO"],         loss: 0.50, apply_rpf: true }
     space_debris:   { type: orbit_group,  orbits: ["LEO"],                              apply_rpf: true }   # share * RPF — method open (O1)
 
   # Lloyd's population + bus type come from the Lloyd's views (same database).

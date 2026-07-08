@@ -91,8 +91,8 @@ _JJ = {
     "Space Weather": ("Space weather – Design deficiency",
                       "Top 4 exposures on largest bus type group"),
     "Generic Defect": ("Generic Defect",
-                       "50% loss of all exposures on largest manufacturer "
-                       "(adjusted for policy period)"),
+                       "Sum of the top-10 satellite losses (exposure × risk "
+                       "factor × 50% loss rate)"),
     "Space Debris": ("Space Debris",
                      "100% loss of all LEO satellites in the same orbit range "
                      "(adjusted for policy period)"),
