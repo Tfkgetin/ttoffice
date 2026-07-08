@@ -185,6 +185,19 @@ def _generic_defect(df, share, cfg):
     loss = share * s["loss"]
     if s.get("apply_rpf", True):
         loss = loss * df["rpf"]
+    if s.get("type") == "largest_manufacturer":
+        # JJ's filed basis: 50% of the LARGEST MANUFACTURER's whole fleet,
+        # policy-period (RPF) adjusted — not the top-N individual risks. Largest
+        # = the manufacturer with the biggest RPF-weighted S3123 loss.
+        by = loss[scope].groupby(df.loc[scope, "bus_manufacturer"]).sum()
+        by = by[by > 0]
+        if not len(by):
+            return 0.0, 0.0, None, df.index[:0]
+        worst = by.idxmax()
+        idx = df.index[scope & df["bus_manufacturer"].eq(worst)]
+        return (loss[idx].sum(), _net(loss[idx], df, cfg),
+                f"Largest manufacturer: {worst}", idx)
+    # default: top-N individual risks
     cand = loss[scope].sort_values(ascending=False)
     top = cand.iloc[: s.get("top_n", 10)]
     return top.sum(), _net(top, df, cfg), f"Top {s.get('top_n', 10)} risks", top.index
