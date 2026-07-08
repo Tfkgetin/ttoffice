@@ -304,7 +304,11 @@ s3123_rds:
     proton_flare:   { type: full,         orbits: ["GEO-GSO"],                          loss: 0.05 }
     space_weather:  { type: bus_type_top, top_n: 4,                                     loss: 1.00 }
     generic_defect: { type: top_n_risks,  top_n: 10, orbits: ["GEO-GSO", "MEO"],        loss: 0.50, apply_rpf: true }
-    space_debris:   { type: orbit_group,  orbits: ["LEO"],                              apply_rpf: true }   # share * RPF — method open (O1)
+    # JJ's basis: 100% of LEO in the worst orbit range (RPF-adj), MAX of the
+    # altitude groups (Group 1 = 400-800 km, Group 2 = 1200-1600 km).
+    space_debris:   { type: orbit_group,  orbits: ["LEO"],                              apply_rpf: true,
+                      altitude_groups: [ { name: "Group 1", low: 400,  high: 800 },
+                                         { name: "Group 2", low: 1200, high: 1600 } ] }
 
   # Lloyd's population + bus type come from the Lloyd's views (same database).
   # NOTE (O1): the 2026Q1 run computed shares from the consortium-factor
@@ -315,9 +319,51 @@ s3123_rds:
   # bus-type join the SW cell renders "n/a" (it printed $0 in the shipped
   # book; the sheet now flags it instead).
   lloyds_source:
-    bus_type_view:   "rds.vw_SpaceRDS_All_Lloyds_RDS"        # layer -> Lloyds Bus Type
+    # PREFERRED: spacecraft-keyed query for the Lloyd's bus-type group + altitude
+    # (drives Space Weather + Space Debris; avoids the broken vw_SpaceRDS_*_Lloyds).
+    spacecraft_attrs_query_file: "sql/lloyds_spacecraft_attrs.sql"
+    bus_type_view:   "rds.vw_SpaceRDS_All_Lloyds_RDS"        # (fallback; mis-named)
     population_view: "rds.vw_SpaceRDS_SpaceWeather_Lloyds"   # S3123 on-risk population
     fallback_mapping_csv: null                              # optional CSV: layer_key,lloyds_bus_type
+
+  # Lloyd's RDS Summary — the workbook's last tab (mirrors JJ). Prior column and
+  # narrative are 2025Q4 → 2026Q1: the quarter the 20% S3123 QS to IG was first
+  # applied, which stepped every net down ~15-18%.
+  lloyds_summary:
+    enabled: true
+    rds_view:            "rds.vw_SpaceRDS_All_Lloyds_RDS"
+    space_weather_view:  "rds.vw_SpaceRDS_SpaceWeather_Lloyds"
+    risk_appetite_usd: 50000000
+    previous_quarter_label: "2025Q4"
+    previous_quarter:                                # 2025Q4 (pre-QS: net = gross)
+      "Proton Flare":   { gross: 18666233, net: 18666233 }
+      "Space Weather":  { gross: 41626793, net: 41626793 }
+      "Generic Defect": { gross: 13758693, net: 13758693 }
+      "Space Debris":   { gross: 10295981, net: 10295981 }
+    qoq_note: >-
+      Q-on-Q: the 20% S3123 QS to IG is applied for the first time this quarter,
+      stepping every net down ~15-18% (net was 100% of gross in 2025Q4; 3
+      spacecraft above the 30m IG line retain 100%). Gross is broadly flat except
+      Space Debris, which jumps on ~10.6m of newly-incepted LEO exposure.
+    change_narrative:
+      "Proton Flare": >-
+        Gross −$0.06m (−0.3%): broadly flat — a small GEO exposure decrease (net
+        −1.3m; 5% ≈ −$64k). Net −$3.42m (−18.3%): the 20% S3123 QS to IG applies
+        for the first time (not in the prior net; 3 excluded spacecraft retain
+        100%), so net steps to ~80% of gross.
+      "Space Weather": >-
+        Gross ~flat: binding bus type unchanged (Airbus Eurostar 3000/NEO). Net
+        −$6.11m (−14.7%): the new 20% QS to IG; Spainsat NG-1 is excluded, so net
+        falls a little less than the full 20%.
+      "Generic Defect": >-
+        Gross +$0.19m (+1.4%): small top-10 moves — Spainsat NG-2 risk factor
+        −1.1m, Thuraya 4-NGS +1.4m, Thales Alenia falls out of the top 10 −0.9m,
+        +0.8m from the VIASAT-3 F2 off-risk data fix. Net −$2.15m (−15.6%): the
+        new 20% QS to IG.
+      "Space Debris": >-
+        Gross +$10.49m (+101.8%): ~10.6m of LEO exposure incepted (≈0.1m expired),
+        lifting the worst orbit-range group. Net +$6.33m (+61.5%): net rises less
+        than gross under the new 20% S3123 QS to IG.
 
   # Tie-out to JJ's manual Lloyd's submission — renders the reconciliation
   # block on the S3123 RDS tab. Drop this whole key once the manual is retired.
