@@ -1461,6 +1461,58 @@ def _change_narrative(wb, changes, per_layer, mr, sw, params):
         _delta_signcolour(ws, f"K{first}:K{r - 1}")
         r += 2
 
+    # ---- Draft narrative (per scenario) — copy/paste-ready, built from this
+    #      run's FIHL movement so the numbers never go stale; drivers are fixed
+    #      commentary the writer verifies/edits before filing. -----------------
+    fihl = {row["scenario"]: row for _, row in sc[sc["entity"] == "FIHL"].iterrows()}
+    mr_top = _mr_top("FIHL")
+    _mrow = fihl.get("Max Risk")
+    _mrx = 0.0
+    if _mrow is not None:
+        _mrx = _num(_mrow.get("cur_gross_exec")) or _num(_mrow.get("cur_gross")) or 0.0
+    DRIVERS = {
+        "Proton Flare": "GEO-GSO renewals (Eutelsat, Arabsat, Inmarsat GX, Turksat) "
+            "broadly offsetting expiring layers and the SXM-10 non-renewal; retention "
+            "stable at ~81% after the unchanged 20% external QS.",
+        "Space Weather": f"the binding single manufacturer ({sw_top}) — the SXM-10 "
+            "(SSL) exit and an easing of the peak-manufacturer concentration, partly "
+            "offset by the Airbus-built Eutelsat and Arabsat renewals.",
+        "Generic Defect": "the Eutelsat fleet (23 GEO spacecraft, ~$243m) renewing "
+            "back into FIID under programme 385575, with Inmarsat GX and Arabsat adding "
+            "GEO exposure — a genuine exposure gain, not a rate or methodology change.",
+        "Space Debris": "LEO run-off, chiefly WorldView / Maxar Legion re-attaching to "
+            "the in-orbit fleet (369418) and counted there, plus other LEO expiries; "
+            "GEO held broadly steady (LEO carries the 0.40 damage ratio vs 0.05 GEO).",
+        "Max Risk": f"the single largest spacecraft ({mr_top}); the binding line size "
+            f"is unchanged (~${_mrx / 1e6:,.0f}m).",
+    }
+    r = _section(ws, r, "Draft narrative (per scenario — verify & edit before filing)")
+    hdr = r
+    r = _hdr(ws, r, 2, ["Scenario", "Draft narrative (copy/paste)"], [16, 60], white=True)
+    for k, scen in enumerate(SCEN_ORDER):
+        row = fihl.get(scen)
+        if row is None:
+            continue
+        cg = _num(row.get("cur_gross_exec")) or _num(row.get("cur_gross"))
+        pg = _num(row.get("prior_gross_exec")) or _num(row.get("prior_gross"))
+        cn, pn = _num(row.get("cur_net")), _num(row.get("prior_net"))
+        dg = (cg / pg - 1) if (cg and pg) else 0.0
+        dn = (cn / pn - 1) if (cn and pn) else 0.0
+        gp, npc = f"{dg:+.1%}", f"{dn:+.1%}"
+        if abs(dg) < 0.02:
+            lead = f"Broadly flat — gross {gp}, net {npc}."
+        else:
+            lead = f"{'Up' if dg > 0 else 'Down'} {gp} gross / {npc} net."
+        text = f"{lead} Driven by {DRIVERS.get(scen, '')}"
+        alt = k % 2 == 0
+        _cell(ws, r, 2, scen, alt=alt, bold=True)
+        nc = _cell(ws, r, 3, text, alt=alt)
+        nc.alignment = Alignment(wrap_text=True, vertical="top")
+        ws.merge_cells(start_row=r, start_column=3, end_row=r, end_column=12)
+        ws.row_dimensions[r].height = 44
+        r += 1
+    r += 2
+
     # Standing commentary the writer edits (seeded from the treaty terms) -------
     r = _section(ws, r, "Reinsurance arrangements (standing — edit as needed)")
     ri = ("External 20% QS on FUL/FIID/FIHL (risk-attaching). Internal QS FUL→FIBL "
