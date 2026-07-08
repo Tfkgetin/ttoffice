@@ -775,23 +775,41 @@ def _rds_input_template(wb, grid, s3grid, params, summary_map=None):
 
 
 def _exposure_bridge(ws, r, changes, closing_total):
-    """Walk from prior in-force exposure to current, component by component.
+    """Walk from prior in-force exposure to current, renewal-aware.
 
-    The most senior-friendly portfolio view: it answers 'why did the book move?'
-    Opening + New business − Run-off (dropped) ± Revaluation (continuing layers)
-    = Closing. All figures are on-risk per-S/C exposure (gross signed).
+    Answers 'why did the book move?' — Opening + New business + Renewals
+    (reprice) − Lapsed ± Revaluation = Closing. New / Renewed / Lapsed are split
+    by the SAME spacecraft-level pairing Book Movement uses
+    (renewals.split_movement), so a renewal carried forward onto a NEW programme
+    id (e.g. Eutelsat 344558 → 385575 via roll-forward) nets out as a RENEWAL —
+    it is NOT double-counted as run-off on the old id plus new business on the
+    successor. All figures are on-risk per-S/C exposure (gross signed).
     """
-    s = changes["layers"]["summary"]
-    new_exp = s["new_exposure"]
-    dropped_exp = s["dropped_exposure"]
-    net_move = s["net_move"]          # ± revaluation on continuing layers
-    # closing is known (current total); derive opening so the bridge ties exactly
-    opening = closing_total - new_exp + dropped_exp - net_move
+    from . import renewals as _rnw
+    L = changes["layers"]
+    sp = _rnw.split_movement(L.get("new"), L.get("dropped"))
+
+    def _x(df):
+        return float(pd.to_numeric(df.get("per_sc"), errors="coerce").fillna(0).sum()) \
+            if df is not None and len(df) else 0.0
+
+    def _n(df):
+        return int(len(df)) if df is not None else 0
+
+    new_x, new_n = _x(sp["new_biz"]), _n(sp["new_biz"])
+    ren_cur, ren_pri = _x(sp["ren_new"]), _x(sp["ren_old"])
+    renewed = ren_cur - ren_pri                 # reprice on carried-forward birds
+    ren_n = _n(sp["ren_new"])
+    lap_x, lap_n = _x(sp["lapsed"]), _n(sp["lapsed"])
+    net_move = L["summary"]["net_move"]         # ± revaluation on continuing layers
+    moved_n = L["summary"]["moved_layers"]
+    # closing is known (current total); derive opening so the walk ties exactly
+    opening = closing_total - new_x - renewed + lap_x - net_move
     prior_as_at = changes.get("prior_as_at", "prior")
 
     r = _section(ws, r, f"Exposure bridge — {prior_as_at} → current (on-risk per-S/C)")
     r = _hdr(ws, r, 2, ["Movement", "Layers", "Exposure", "% of opening"],
-             [40, 10, 18, 13])
+             [46, 10, 18, 13])
 
     def line(label, n, val, alt, bold=False, total=False):
         _cell(ws, r0[0], 2, label, alt=alt, bold=bold)
@@ -809,28 +827,31 @@ def _exposure_bridge(ws, r, changes, closing_total):
         r0[0] += 1
 
     r0 = [r]
-    line(f"Opening in-force ({prior_as_at})", None, opening, False, bold=True, total=False)
-    line("+ New business (layers added)", s["new_layers"], new_exp, True)
-    line("− Run-off / expiry (layers dropped)", -s["dropped_layers"], -dropped_exp, False)
-    line("± Revaluation (continuing layers)", s["moved_layers"], net_move, True)
-    line("Closing in-force (current)", None, closing_total, False, bold=True, total=True)
+    line(f"Opening in-force ({prior_as_at})", None, opening, False, bold=True)
+    line("+ New business (genuinely new)", new_n, new_x, True)
+    line("↻ Renewals (carried forward — reprice)", ren_n, renewed, False)
+    line("− Lapsed / run-off (off the book)", -lap_n, -lap_x, True)
+    line("± Revaluation (continuing layers)", moved_n, net_move, False)
+    line("Closing in-force (current)", None, closing_total, True, bold=True, total=True)
     r = r0[0]
 
     # one-line read
     net_change = closing_total - opening
     direction = "grew" if net_change >= 0 else "shrank"
-    drivers = []
-    if abs(new_exp) > abs(dropped_exp) and abs(new_exp) > abs(net_move):
-        drivers.append("new business")
-    if abs(dropped_exp) > abs(new_exp):
-        drivers.append("run-off")
-    if abs(net_move) > max(abs(new_exp), abs(dropped_exp)):
-        drivers.append("revaluation of continuing layers")
-    drv = drivers[0] if drivers else "mixed movements"
+    if abs(new_x) >= abs(lap_x) and abs(new_x) >= abs(net_move):
+        drv = "new business"
+    elif abs(lap_x) >= abs(new_x) and abs(lap_x) >= abs(net_move):
+        drv = "genuine run-off"
+    elif abs(net_move) > max(abs(new_x), abs(lap_x)):
+        drv = "revaluation of continuing layers"
+    else:
+        drv = "mixed movements"
     nc = ws.cell(row=r, column=2,
                  value=f"▸  The book {direction} {_money_m(abs(net_change))} "
                        f"({net_change / opening:+.1%}) vs {prior_as_at}, driven mainly "
-                       f"by {drv}.")
+                       f"by {drv}. Renewals carried forward via roll-forward net out "
+                       f"here (counted once under the successor programme, not as "
+                       f"run-off).")
     nc.font = Font(name=_FB, size=9, italic=True, color=SOFT)
     ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=5)
     nc.alignment = Alignment(wrap_text=True, vertical="top")
