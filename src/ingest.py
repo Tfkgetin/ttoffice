@@ -345,6 +345,48 @@ def attach_lloyds_bus_type(df: pd.DataFrame, params) -> pd.DataFrame:
     if "lloyds_bus_type" in df.columns and df["lloyds_bus_type"].notna().any():
         return df
     df = df.copy()
+
+    # PREFERRED: a spacecraft-keyed attributes query (Lloyd's bus type from the
+    # (Bus Type, Bus Manufacturer) map + latest altitude), which avoids the
+    # broken vw_SpaceRDS_*_Lloyds views entirely. Returns SpacecraftId |
+    # LloydsBusType | AltitudeKm; keyed by spacecraft_id onto per-layer.
+    qf = cfg.get("spacecraft_attrs_query_file")
+    if qf and params.ingest.get("source") == "sql":
+        try:
+            from pathlib import Path
+            import pyodbc
+            import warnings as _w
+            sc = dict(params.ingest["sql"])
+            drv = sc.get("driver") or _pick_driver()
+            conn = (f"DRIVER={{{drv}}};SERVER={sc['server']};"
+                    f"DATABASE={sc['database']};Trusted_Connection=yes;")
+            if "18" in str(drv):
+                conn += "TrustServerCertificate=yes;"
+            cn = pyodbc.connect(conn, timeout=30)
+            with _w.catch_warnings():
+                _w.simplefilter("ignore")
+                attrs = pd.read_sql(Path(qf).read_text(), cn)
+            am = {_norm(c): c for c in attrs.columns}
+            c_sid = am.get("spacecraftid") or am.get("seradataspacecraftid")
+            c_bt = am.get("lloydsbustype") or am.get("lloydssatellitebustypelist")
+            c_alt = am.get("altitudekm") or am.get("altitudelatestkm")
+            if c_sid and "spacecraft_id" in df.columns:
+                key = _norm_id(df["spacecraft_id"])
+                asid = _norm_id(attrs[c_sid])
+                if c_bt:
+                    df["lloyds_bus_type"] = key.map(dict(zip(asid, attrs[c_bt])))
+                if c_alt:
+                    df["altitude_km"] = key.map(dict(zip(
+                        asid, pd.to_numeric(attrs[c_alt], errors="coerce"))))
+                nbt = int(df.get("lloyds_bus_type", pd.Series(dtype=object)).notna().sum())
+                nal = int(df.get("altitude_km", pd.Series(dtype=float)).notna().sum())
+                print(f"      Lloyd's attrs: bus type on {nbt}/{len(df)} layers, "
+                      f"altitude on {nal}/{len(df)} layers")
+                if nbt:
+                    return df
+        except Exception as e:  # noqa: BLE001
+            print(f"      Lloyd's attrs query failed ({e}); trying the view")
+
     view = cfg.get("bus_type_view")
     if view and params.ingest.get("source") == "sql":
         try:
