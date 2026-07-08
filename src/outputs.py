@@ -136,6 +136,19 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
             _wb, s3grid, rec, as_at=str(params.as_at), qoq=s3_qoq)
         _wb.save(_fp)
 
+    # Lloyd's RDS Summary (JJ's filed deliverable) — read the two DB views and
+    # render as the workbook's LAST tab. Added after every other sheet so it
+    # lands last; degrades to a visible banner if the views aren't reachable.
+    lloyds = ingest_mod.load_lloyds_rds_summary(params)
+    if lloyds:
+        from . import lloyds_sheet
+        import openpyxl as _opx2
+        _fpl = str(out / f"Space_RDS_results_{params.as_at}.xlsx")
+        _wbl = _opx2.load_workbook(_fpl)
+        lloyds_sheet.write_lloyds_rds_summary(_wbl, lloyds, as_at=str(params.as_at))
+        _wbl.save(_fpl)
+        print("      Lloyd's RDS Summary tab written (last tab)")
+
     # persist this run so future quarters can diff against it
     persist.save_run(params, per_layer, summary)
     if chg:

@@ -618,3 +618,57 @@ def load(params) -> pd.DataFrame:
     if (params.raw.get("s3123_rds") or {}).get("enabled"):
         df = attach_lloyds_bus_type(df, params)
     return df
+
+
+def load_lloyds_rds_summary(params):
+    """Read JJ's two Lloyd's RDS views verbatim for the 'Lloyds RDS Summary' tab:
+
+      * rds.vw_SpaceRDS_All_Lloyds_RDS      -> the four headline RDS
+      * rds.vw_SpaceRDS_SpaceWeather_Lloyds -> the Space-Weather bus-type block
+
+    The RDS methodology lives in these views (same database as the IG book), so
+    the tab ties to JJ's filed 'Lloyds RDS Summary-final' to the dollar without
+    re-deriving anything. Returns {'rds': df|None, 'space_weather': df|None} or
+    None when not configured. NEVER raises — a missing/unreadable view degrades
+    to None and the sheet renders a visible banner instead.
+    """
+    cfg = ((params.raw.get("s3123_rds") or {}).get("lloyds_summary") or {})
+    if not cfg.get("enabled"):
+        return None
+    if params.ingest.get("source") != "sql":
+        print("      Lloyd's RDS summary: skipped (ingest source is not SQL)")
+        return None
+    try:
+        import pyodbc
+        sql_cfg = dict(params.ingest["sql"])
+        driver = sql_cfg.get("driver") or _pick_driver()
+        conn = (f"DRIVER={{{driver}}};SERVER={sql_cfg['server']};"
+                f"DATABASE={sql_cfg['database']};Trusted_Connection=yes;")
+        if "18" in str(driver):
+            conn += "TrustServerCertificate=yes;"
+        cn = pyodbc.connect(conn, timeout=30)
+    except Exception as e:  # noqa: BLE001
+        print(f"      Lloyd's RDS summary: skipped (SQL connect failed: {e})")
+        return None
+
+    import warnings as _w
+
+    def _read(view):
+        if not view:
+            return None
+        try:
+            with _w.catch_warnings():
+                _w.simplefilter("ignore")   # pandas' non-SQLAlchemy warning
+                return pd.read_sql(f"SELECT * FROM {view}", cn)
+        except Exception as e:  # noqa: BLE001
+            print(f"      Lloyd's RDS summary: view {view} unreadable ({e})")
+            return None
+
+    out = {"rds": _read(cfg.get("rds_view")),
+           "space_weather": _read(cfg.get("space_weather_view"))}
+    n1 = 0 if out["rds"] is None else len(out["rds"])
+    n2 = 0 if out["space_weather"] is None else len(out["space_weather"])
+    print(f"      Lloyd's RDS summary: {n1} RDS row(s), {n2} bus-type row(s) read")
+    if not n1 and not n2:
+        return None
+    return out
