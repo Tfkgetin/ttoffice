@@ -745,6 +745,52 @@ def linkify_change_narrative(wb, sheet="Change Narrative", summary="Summary"):
                 ws.cell(row=r, column=5).value = f"=Summary!J{sr}"   # Cur Net
 
 
+# --------------------------------------------------------------------------- #
+#  Summary  →  Per Layer (operating-entity additive-scenario gross only)        #
+# --------------------------------------------------------------------------- #
+def linkify_summary(wb, sheet="Summary", per_layer="Per Layer"):
+    """Formula-drive the additive scenario grosses — Proton Flare / Generic
+    Defect / Space Debris — for the operating entities FUL & FIID: each becomes
+    a SUMIFS on the Per Layer scenario-loss column (itself per_sc × rate × RPF,
+    linked to Parameters). Deliberately NOT touched, because they are not plain
+    sums of a Per Layer column: FIHL (combined — the scenario loss also lands on
+    the S3123/equity add-on exposure), FIBL (internal receiver), Space Weather
+    (worst single manufacturer) and Max Risk (largest single spacecraft). Those
+    stay the engine's reconciled values."""
+    if sheet not in wb.sheetnames or per_layer not in wb.sheetnames:
+        return
+    ws = wb[sheet]
+    pl = wb[per_layer]
+    H = _header_cols(pl, 1)
+    if not {"entity", "pf_fihl", "gd_fihl", "sd_fihl"} <= set(H):
+        return
+    PL = f"'{per_layer}'"
+    ent_c = _col_letter(H["entity"])
+    scen_col = {"Proton Flare": _col_letter(H["pf_fihl"]),
+                "Generic Defect": _col_letter(H["gd_fihl"]),
+                "Space Debris": _col_letter(H["sd_fihl"])}
+    bases = _summary_bases(ws)
+    linked = False
+    for ent in ("FUL", "FIID"):
+        base = bases.get(ent)
+        if base is None:
+            continue
+        for scen, sc in scen_col.items():
+            r = base + SCEN_ORDER.index(scen)
+            ws.cell(row=r, column=4).value = (
+                f'=SUMIFS({PL}!{sc}:{sc},{PL}!{ent_c}:{ent_c},"{ent}")')
+            linked = True
+    if linked:
+        from openpyxl.styles import Font
+        nr = ws.max_row + 2
+        c = ws.cell(row=nr, column=2, value=(
+            "Gross: FUL & FIID Proton Flare / Generic Defect / Space Debris are "
+            "live SUMIFS on Per Layer (per_sc x rate x RPF). FIHL (combined), FIBL "
+            "(receiver), Space Weather (worst manufacturer) and Max Risk (largest "
+            "spacecraft) are the reconciled engine values — not plain per-layer sums."))
+        c.font = Font(name="Calibri", size=8, italic=True, color="6B7785")
+
+
 def linkify(wb):
     linkify_per_layer(wb)
     linkify_netting(wb)
@@ -753,3 +799,4 @@ def linkify(wb):
     linkify_changes(wb)
     linkify_cover(wb)
     linkify_change_narrative(wb)
+    linkify_summary(wb)
