@@ -1413,8 +1413,9 @@ def _change_narrative(wb, changes, per_layer, mr, sw, params):
 
     r = 5
     HEAD = ["Entity", "Key driver", "Cur Gross", "Cur Net", "Prior Gross",
-            "Prior Net", "Δ Gross", "Δ Gross %", "Δ Net", "Narrative (write here)"]
-    WID = [10, 26, 15, 15, 15, 15, 14, 10, 14, 46]
+            "Prior Net", "Δ Gross", "Δ Gross %", "Δ Net", "Δ Net %",
+            "Narrative (write here)"]
+    WID = [10, 26, 15, 15, 15, 15, 14, 10, 14, 10, 46]
 
     for scen in SCEN_ORDER:
         block = sc[sc["scenario"] == scen]
@@ -1449,12 +1450,15 @@ def _change_narrative(wb, changes, per_layer, mr, sw, params):
             c9 = _fcell(ws, r, 9, f"=IFERROR((D{r}-F{r})/F{r},0)", alt=alt)
             c9.number_format = PCT
             _fcell(ws, r, 10, f"=E{r}-G{r}", alt=alt, money=True)
+            c11 = _fcell(ws, r, 11, f"=IFERROR((E{r}-G{r})/G{r},0)", alt=alt)
+            c11.number_format = PCT
             # Narrative cell — bordered blank for writing
-            nc = _cell(ws, r, 11, None, alt=alt)
+            nc = _cell(ws, r, 12, None, alt=alt)
             nc.alignment = Alignment(wrap_text=True, vertical="top")
             r += 1
-        # Δ% sign colour
+        # Δ% sign colour on both Δ Gross % (I) and Δ Net % (K)
         _delta_signcolour(ws, f"I{first}:I{r - 1}")
+        _delta_signcolour(ws, f"K{first}:K{r - 1}")
         r += 2
 
     # Standing commentary the writer edits (seeded from the treaty terms) -------
@@ -1466,14 +1470,14 @@ def _change_narrative(wb, changes, per_layer, mr, sw, params):
     rc = ws.cell(row=r, column=2, value=ri)
     rc.font = Font(name=_FB, size=9, color=INK)
     rc.alignment = Alignment(wrap_text=True, vertical="top")
-    ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=11)
+    ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=12)
     ws.row_dimensions[r].height = 56
     r += 2
     fc = ws.cell(row=r, column=2, value="Further commentary (write here): ")
     fc.font = Font(name=_FB, size=9, italic=True, color=SOFT)
-    ws.merge_cells(start_row=r, start_column=2, end_row=r + 2, end_column=11)
+    ws.merge_cells(start_row=r, start_column=2, end_row=r + 2, end_column=12)
 
-    for col, w in zip("BCDEFGHIJK", WID):
+    for col, w in zip("BCDEFGHIJKL", WID):
         ws.column_dimensions[col].width = w
 
 

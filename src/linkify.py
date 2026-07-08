@@ -449,12 +449,32 @@ def linkify_portfolio(wb, sheet="Portfolio", per_layer="Per Layer", changes="Cha
     if op:
         new_r, run_r, rev_r, close_r = op + 1, op + 2, op + 3, op + 4
         if have_changes:
-            c_new = _find_row(wb[changes], 2, "New exposure")
-            c_drop = _find_row(wb[changes], 2, "Dropped exposure")
-            if c_new:
-                ws.cell(row=new_r, column=4).value = f"=Changes!C{c_new}"
-            if c_drop:
-                ws.cell(row=run_r, column=4).value = f"=-Changes!C{c_drop}"
+            c = wb[changes]
+
+            def _cr(prefix):
+                for rr in range(1, c.max_row + 1):
+                    if str(c.cell(row=rr, column=2).value or "").startswith(prefix):
+                        return rr
+                return None
+            # Link every step to the Changes 'Exposure bridge by reason' block so
+            # the Portfolio bridge reconciles Opening -> Closing and is not baked:
+            #   Opening   = prior in-force ; +New = new-programme + new-existing ;
+            #   -Run-off  = expired (already negative) ; Reval = moves on continuing.
+            r_open = _cr("Prior quarter (opening)")
+            r_newp = _cr("New layers — new programmes")
+            r_newe = _cr("New layers — existing programmes")
+            r_exp = _cr("Expired without replacement")
+            r_mov = _cr("Moves on continuing layers")
+            if r_open:
+                ws.cell(row=op, column=4).value = f"=Changes!C{r_open}"
+            if r_newp and r_newe:
+                ws.cell(row=new_r, column=4).value = f"=Changes!C{r_newp}+Changes!C{r_newe}"
+            elif r_newp:
+                ws.cell(row=new_r, column=4).value = f"=Changes!C{r_newp}"
+            if r_exp:
+                ws.cell(row=run_r, column=4).value = f"=Changes!C{r_exp}"
+            if r_mov:
+                ws.cell(row=rev_r, column=4).value = f"=Changes!C{r_mov}"
         ws.cell(row=close_r, column=4).value = f"=SUM(D{op}:D{rev_r})"
         for rr in (new_r, run_r, rev_r):
             ws.cell(row=rr, column=5).value = f"=IFERROR(D{rr}/$D${op},0)"
