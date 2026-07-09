@@ -398,7 +398,7 @@ def _control(wb, per_layer, params, source, recon, colmap):
     return ws
 
 
-def _summary(ws, grid, params, source, per_layer):
+def _summary(ws, grid, params, source, per_layer, addon_refs=None):
     # rowmap: (entity, scenario) -> dict of Summary A1 cell refs, so downstream
     # sheets (e.g. the RDS Input Template) can point at these cells as live
     # formulas instead of re-emitting hard-coded values. Populated below.
@@ -480,8 +480,19 @@ def _summary(ws, grid, params, source, per_layer):
             equity_ref = None
             if _memo_here:
                 memo_present = [m for m in FIHL_MEMO if m[0] in grid.columns]
+                # The split lives once on the "S3123 & Equity (IG)" tab; point
+                # each memo cell there as a live reference so it is not a baked
+                # number. Fall back to the raw value if refs aren't supplied.
+                _AKEY = {"gross": "gross_ex", "s3123_qs": "s3123_qs",
+                         "equity_usd": "equity"}
+                aref = (addon_refs or {}).get("fihl", {}).get(val("scenario"))
+                asheet = (addon_refs or {}).get("sheet")
                 for j, (k, _lbl) in enumerate(memo_present):
-                    _cell(ws, r, 12 + j, val(k), alt=alt, money=True)
+                    ref = aref.get(_AKEY[k]) if aref else None
+                    if ref and asheet:
+                        _cell(ws, r, 12 + j, f"='{asheet}'!{ref}", alt=alt, money=True)
+                    else:
+                        _cell(ws, r, 12 + j, val(k), alt=alt, money=True)
                     if k == "equity_usd":
                         equity_ref = f"{get_column_letter(12 + j)}{r}"
                 # FIHL headline Gross = ex-add-on gross + S3123 QS + IG equity —
@@ -3315,6 +3326,10 @@ def _s3123_ig_addons(wb, grid, params):
     r = _hdr(ws, r, 2, ["Scenario", "FIHL ex add-ons", "S3123 QS to IG", "IG Equity",
                         "FIHL incl add-ons (headline)", "Net incl add-ons"],
              [16, 22, 16, 14, 18, 18])
+    # This tab is the SINGLE SOURCE of the FIHL ex-add-on split; the Summary's
+    # memo columns point here as live references (see _summary addon_refs), so
+    # the split is keyed once. Capture each scenario's cell refs to hand back.
+    fihl_ref = {}
     for i, scen in enumerate(scens):
         row = fihl.loc[scen]
         _cell(ws, r, 2, scen, alt=i % 2)
@@ -3324,6 +3339,7 @@ def _s3123_ig_addons(wb, grid, params):
         c = _cell(ws, r, 6, f"=SUM(C{r}:E{r})", alt=i % 2, bold=True)
         c.number_format = MONEY; c.alignment = Alignment(horizontal="right")
         _cell(ws, r, 7, float(row.get("net_incl_addons", 0) or 0), alt=i % 2, money=True)
+        fihl_ref[scen] = {"gross_ex": f"C{r}", "s3123_qs": f"D{r}", "equity": f"E{r}"}
         r += 1
     r += 1
 
@@ -3349,7 +3365,7 @@ def _s3123_ig_addons(wb, grid, params):
             value="S3123 QS to IG is the same 20% cession that nets down the "
                   "syndicate's own return on the S3123 RDS tab - the two tabs "
                   "must always agree on it.").font = F_SUB
-    return ws
+    return {"sheet": ws.title, "fihl": fihl_ref}
 
 
 def write_results(path, per_layer, sw, mr, grid, params, source,
@@ -3367,8 +3383,13 @@ def write_results(path, per_layer, sw, mr, grid, params, source,
     _cover(wb, params, per_layer, grid)
     _exec_summary(wb, grid, per_layer, params, source, recon, excluded, changes)
     _control(wb, per_layer, params, source, recon, colmap)
+    # Build the S3123 & Equity (IG) tab FIRST so it is the single source of the
+    # FIHL ex-add-on split; the Summary's memo columns reference it live. Final
+    # tab order is imposed by the `order` list below, so build order is free.
+    addon_refs = _s3123_ig_addons(wb, grid, params)   # C1: manual-convention split
     ws_sum = wb.create_sheet("Summary")
-    summary_map = _summary(ws_sum, grid, params, source, per_layer)
+    summary_map = _summary(ws_sum, grid, params, source, per_layer,
+                           addon_refs=addon_refs)
     _portfolio(wb, per_layer, params, colmap, changes)
     _parameters(wb, params)
     _waterfalls(wb, grid)
@@ -3406,7 +3427,6 @@ def write_results(path, per_layer, sw, mr, grid, params, source,
               f"layout changed; charts_xlsx scans it and needs its anchors "
               f"updated. Deliverable tabs are unaffected.")
     _per_layer(wb, per_layer)
-    _s3123_ig_addons(wb, grid, params)   # C1: manual-convention split
     _rds_input_template(wb, grid, s3123_grid, params, summary_map)   # paste-ready regulator block
     if s3123_grid is not None and len(s3123_grid):
         from .s3123_sheet import write_s3123_sheet
