@@ -2061,9 +2061,19 @@ def _changes(wb, changes, per_layer=None, params=None):
             _cell(ws, r, 5, row.get("per_sc"), alt=alt, money=True)
             r += 1
         r += 1
-    dl = changes["layers"]["dropped"]
-    if len(dl):
-        r = _section(ws, r, f"Dropped layers (top {min(10, len(dl))} by exposure)")
+    # Show only GENUINE lapses — layers that actually left the book. A layer that
+    # renewed onto a NEW programme id (e.g. Eutelsat 36D 344558→385575) is paired
+    # by split_movement into ren_old and must NOT appear here as a loss. Mirror the
+    # 'Lapsed exposure (off the book)' line above: from the lapsed set, exclude
+    # renewed (bound_captured) and in-progress / bound-missing renewals.
+    if _lap is not None and len(_lap) and "renewal_state" in getattr(_lap, "columns", []):
+        dl = _lap[~_lap["renewal_state"].isin(_COV + _PEND)].copy()
+    elif _lap is not None:
+        dl = _lap.copy()
+    else:
+        dl = changes["layers"]["dropped"]
+    if dl is not None and len(dl):
+        r = _section(ws, r, f"Lapsed layers — off the book (top {min(10, len(dl))} by exposure)")
         r = _hdr(ws, r, 2, ["Spacecraft", "Entity", "Orbit", "Exposure"],
                  [28, 10, 12, 15])
         for k, (_, row) in enumerate(dl.sort_values("per_sc", ascending=False)
