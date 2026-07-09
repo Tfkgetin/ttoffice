@@ -320,7 +320,30 @@ _PL_KEEP = ["program_id", "layer_id", "entity", "mapping_code", "spacecraft_id",
             "spacecraft_name", "orbit", "bus_manufacturer", "inception",
             "off_risk_date", "rpf", "per_sc", "ext_qs", "s3123_qs", "equity_usd",
             "igr_qs_rate", "igr_qs_ceded", "net_of_qs", "xol_ceded",
-            "net_of_xol", "pf_fihl", "gd_fihl", "sd_fihl", "total_fibl_ceded"]
+            "net_of_xol", "pf_fihl", "gd_fihl", "sd_fihl", "total_fibl_ceded",
+            # per-entity scenario contributions + per-$ cession rates: the
+            # backbone the Summary & S3123 tabs SUMPRODUCT against so those
+            # aggregates are live formulas, not baked numbers (additive scenarios).
+            "pf_ful", "pf_fiid", "gd_ful", "gd_fiid", "sd_ful", "sd_fiid",
+            "ext_qs_pp", "igr_ceded_pp", "s3123_qs_pp", "equity_pp"]
+
+# additive scenarios only — selections (Space Weather / Max Risk) are not sums
+_SP_SCEN = {"Proton Flare": "pf", "Generic Defect": "gd", "Space Debris": "sd"}
+_SP_ENT = {"FIHL": "fihl", "FUL": "ful", "FIID": "fiid"}
+
+
+def _pl_range(colmap, n, field):
+    """Finite Per Layer data range $X$2:$X$n+1 for a mapped field, else None."""
+    col = colmap.get(field)
+    return f"'{_PL_SHEET}'!${col}$2:${col}${n + 1}" if col else None
+
+
+def _sumproduct(colmap, n, *fields):
+    """=SUMPRODUCT over Per Layer of the given fields, or None if any is absent."""
+    rngs = [_pl_range(colmap, n, f) for f in fields]
+    if any(x is None for x in rngs):
+        return None
+    return "=SUMPRODUCT(" + ",".join(rngs) + ")"
 
 
 def _pl_map(per_layer):
@@ -413,6 +436,8 @@ def _summary(ws, grid, params, source, per_layer, addon_refs=None):
     # sheets (e.g. the RDS Input Template) can point at these cells as live
     # formulas instead of re-emitting hard-coded values. Populated below.
     rowmap = {}
+    _plc, _ = _pl_map(per_layer)        # Per Layer column letters for SUMPRODUCT
+    _plN = len(per_layer)               # data rows (2 .. _plN+1)
     _title(ws, f"Space RDS · {params.quarter}",
            f"as-at {params.as_at} · source: {source} · "
            f"{len(per_layer)} rows · netting cascade = live formulas")
@@ -469,30 +494,49 @@ def _summary(ws, grid, params, source, per_layer, addon_refs=None):
                           "tab: sum of eligible per-layer exposure (per_sc) x the "
                           "scenario factor. Reconcile on Per Layer / Netting "
                           "Waterfalls.")
-            cE = _cell(ws, r, 5, val("ext_qs"), alt=alt, money=True)
-            _note(cE, "External QS (outwards RI) = SUM per layer of (exposure x "
-                      "outwards-slot pct, by inception date). This quarter every "
-                      "on-risk layer sits in the 20% slot (Parameters -> External "
-                      "Quota Share), so it equals 20% of the ex-add-on gross - but "
-                      "it is a per-layer aggregation, NOT a flat rate: a bird in a "
-                      "different slot changes it. Authoritative figure is the engine "
-                      "value here; reconcile on Per Layer (ext_qs column).")
+            # contribution column for this entity x scenario (additive scenarios)
+            _scn = val("scenario")
+            _contrib = (f"{_SP_SCEN[_scn]}_{_SP_ENT[entity]}"
+                        if _scn in _SP_SCEN and entity in _SP_ENT else None)
+            # Ext QS — LIVE SUMPRODUCT for additive scenarios; engine value + note
+            # for Space Weather / Max Risk (selections, not per-layer sums).
+            _extf = _sumproduct(_plc, _plN, _contrib, "ext_qs_pp") if _contrib else None
+            if _extf:
+                cE = _cell(ws, r, 5, _extf, alt=alt, money=True)
+                _note(cE, "LIVE: SUMPRODUCT over Per Layer of (this entity/scenario "
+                          "per-layer contribution x per-layer external-QS rate = "
+                          "ext_qs/per_sc). Ties to the engine to the cent; edit Per "
+                          "Layer and it recomputes. (Outwards RI is per-layer by "
+                          "inception slot - see Parameters -> External Quota Share.)")
+            else:
+                cE = _cell(ws, r, 5, val("ext_qs"), alt=alt, money=True)
+                _note(cE, "Selection scenario (Space Weather / Max Risk): external QS "
+                          "on the selected manufacturer / bird, not a per-layer sum, "
+                          "so shown as the engine value. Reconcile on the Space "
+                          "Weather / Max Risk tab and Per Layer (ext_qs).")
             # Net of Ext QS = Gross - Ext QS  (live)
             f6 = f"=D{r}-E{r}" if val("net_of_ext_qs") is not None else None
             _cell(ws, r, 6, f6, alt=alt, money=True)
-            cG = _cell(ws, r, 7, val("igr_qs_ceded"), alt=alt, money=True)
+            # IGR QS — LIVE SUMPRODUCT for FUL/FIID additive scenarios; 0 at FIHL
+            # group view; engine value + note for the selection scenarios.
+            _igrf = (_sumproduct(_plc, _plN, _contrib, "igr_ceded_pp")
+                     if (_contrib and not is_fihl) else None)
             if is_fihl:
+                cG = _cell(ws, r, 7, val("igr_qs_ceded"), alt=alt, money=True)
                 _note(cG, "0 at the FIHL group view: the intra-group QS is ceded by "
                           "FUL & FIID and RECEIVED by FIBL, so it nets out at group "
                           "level. See the FUL / FIID rows and the FIBL receiver block.")
+            elif _igrf:
+                cG = _cell(ws, r, 7, _igrf, alt=alt, money=True)
+                _note(cG, "LIVE: SUMPRODUCT over Per Layer of (contribution x per-layer "
+                          "IGR-QS rate = igr_qs_ceded/per_sc). Ties to the engine to "
+                          "the cent. Rate on Parameters -> IGR " + entity + " QS; "
+                          "drill on Per Layer (igr_qs_ceded).")
             else:
-                _igr = (((getattr(params, 'raw', {}) or {}).get('igr_qs', {})
-                         .get('default', {}) or {}).get(entity))
-                _rtxt = f" (rate {_igr:.0%})" if isinstance(_igr, (int, float)) else ""
-                _note(cG, f"IGR quota share ceded to FIBL = SUM per layer of "
-                          f"(net-of-ext x IGR {entity} QS rate){_rtxt}. Rate on "
-                          f"Parameters -> IGR {entity} QS. Drill: Per Layer "
-                          f"(igr_qs_ceded) / Netting Waterfalls.")
+                cG = _cell(ws, r, 7, val("igr_qs_ceded"), alt=alt, money=True)
+                _note(cG, "Selection scenario: IGR QS on the selected manufacturer / "
+                          "bird, not a per-layer sum. Engine value; reconcile on the "
+                          "Space Weather / Max Risk tab and Per Layer (igr_qs_ceded).")
             # Net of QS = Net of Ext QS - IGR QS Ceded  (live)
             f8 = f"=F{r}-G{r}" if val("net_of_qs") is not None else None
             _cell(ws, r, 8, f8, alt=alt, money=True)
@@ -1670,13 +1714,26 @@ def _per_layer(wb, per_layer):
     keep = [c for c in _PL_KEEP if c in per_layer.columns]
     money_cols = {"per_sc", "ext_qs", "s3123_qs", "igr_qs_ceded", "net_of_qs",
                   "xol_ceded", "net_of_xol", "pf_fihl", "gd_fihl", "sd_fihl"}
+    # per-$ cession-rate helper columns are written as LIVE formulas (= $ column /
+    # per_sc) so the Summary/S3123 SUMPRODUCT backbone recomputes if a per-layer $
+    # value is edited. Maps helper field -> numerator field.
+    _PP_SRC = {"ext_qs_pp": "ext_qs", "igr_ceded_pp": "igr_qs_ceded",
+               "s3123_qs_pp": "s3123_qs", "equity_pp": "equity_usd"}
+    _idx = {name: j for j, name in enumerate(keep)}
     for j, name in enumerate(keep):
         c = ws.cell(row=1, column=1 + j, value=name)
         c.font = F_HDR; c.fill = FILL_HDR
         ws.column_dimensions[get_column_letter(1 + j)].width = \
             22 if name in ("spacecraft_name", "bus_manufacturer") else 13
+    _per_col = (get_column_letter(_idx["per_sc"] + 1) if "per_sc" in _idx else None)
     for i, (_, row) in enumerate(per_layer[keep].iterrows(), start=2):
         for j, name in enumerate(keep):
+            if name in _PP_SRC and _PP_SRC[name] in _idx and _per_col:
+                num = get_column_letter(_idx[_PP_SRC[name]] + 1)
+                c = ws.cell(row=i, column=1 + j,
+                            value=f"=IFERROR({num}{i}/{_per_col}{i},0)")
+                c.font = F_CELL
+                continue
             v = row[name]
             if isinstance(v, (dt.date, dt.datetime)):
                 v = str(v)
@@ -3337,7 +3394,7 @@ def _exec_summary(wb, grid, per_layer, params, source, recon, excluded, changes)
     ws.merge_cells(start_row=r, start_column=2, end_row=r + 1, end_column=6)
     ws.cell(row=r, column=2).alignment = Alignment(wrap_text=True, vertical="top")
 
-def _s3123_ig_addons(wb, grid, params):
+def _s3123_ig_addons(wb, grid, params, per_layer=None):
     """The IG add-ons and the ex-add-on split, on their own tab.
 
     DECIDED (user, 2026Q1): FIHL/FIBL headline everywhere in the book — Summary,
@@ -3398,17 +3455,43 @@ def _s3123_ig_addons(wb, grid, params):
     # This tab is the SINGLE SOURCE of the FIHL ex-add-on split; the Summary's
     # memo columns point here as live references (see _summary addon_refs), so
     # the split is keyed once. Capture each scenario's cell refs to hand back.
+    # Live backbone: for the additive scenarios the three components are computed
+    # in-workbook by SUMPRODUCT over Per Layer (contribution x per-layer rate), so
+    # nothing is baked. Space Weather / Max Risk are selections (worst manufacturer
+    # / single bird), not per-layer sums, so they stay engine values with a note.
+    _plc, _ = _pl_map(per_layer) if per_layer is not None else ({}, [])
+    _plN = len(per_layer) if per_layer is not None else 0
     fihl_ref = {}
+    fihl_scen_row = {}
     for i, scen in enumerate(scens):
         row = fihl.loc[scen]
         _cell(ws, r, 2, scen, alt=i % 2)
-        _cell(ws, r, 3, float(row.get("gross", 0)), alt=i % 2, money=True)
-        _cell(ws, r, 4, float(row.get("s3123_qs", 0) or 0), alt=i % 2, money=True)
-        _cell(ws, r, 5, float(row.get("equity_usd", 0) or 0), alt=i % 2, money=True)
+        contrib = f"{_SP_SCEN[scen]}_fihl" if scen in _SP_SCEN else None
+        gr_rng = _pl_range(_plc, _plN, contrib) if contrib else None
+        s3f = _sumproduct(_plc, _plN, contrib, "s3123_qs_pp") if contrib else None
+        eqf = _sumproduct(_plc, _plN, contrib, "equity_pp") if contrib else None
+        if gr_rng and s3f and eqf:      # additive scenario -> live
+            cC = _cell(ws, r, 3, f"=SUM({gr_rng})", alt=i % 2, money=True)
+            _note(cC, "LIVE: SUM of the per-layer FIHL contribution for this scenario "
+                      "on Per Layer. Reconciles to the engine to the cent.")
+            cDd = _cell(ws, r, 4, s3f, alt=i % 2, money=True)
+            _note(cDd, "LIVE: SUMPRODUCT(FIHL contribution, s3123_qs/per_sc) over Per "
+                       "Layer = SUM per layer of (contribution x s3123 factor x 20%).")
+            cEe = _cell(ws, r, 5, eqf, alt=i % 2, money=True)
+            _note(cEe, "LIVE: SUMPRODUCT(FIHL contribution, equity_usd/per_sc) over Per "
+                       "Layer = SUM per layer of (contribution x equity% x s3123 factor).")
+        else:                            # Space Weather / Max Risk -> engine value
+            cC = _cell(ws, r, 3, float(row.get("gross", 0)), alt=i % 2, money=True)
+            _note(cC, "Selection scenario (worst manufacturer / single bird), not a "
+                      "per-layer sum. Engine value; reconcile on the Space Weather / "
+                      "Max Risk tab.")
+            _cell(ws, r, 4, float(row.get("s3123_qs", 0) or 0), alt=i % 2, money=True)
+            _cell(ws, r, 5, float(row.get("equity_usd", 0) or 0), alt=i % 2, money=True)
         c = _cell(ws, r, 6, f"=SUM(C{r}:E{r})", alt=i % 2, bold=True)
         c.number_format = MONEY; c.alignment = Alignment(horizontal="right")
         _cell(ws, r, 7, float(row.get("net_incl_addons", 0) or 0), alt=i % 2, money=True)
         fihl_ref[scen] = {"gross_ex": f"C{r}", "s3123_qs": f"D{r}", "equity": f"E{r}"}
+        fihl_scen_row[scen] = r
         r += 1
     r += 1
 
@@ -3421,11 +3504,22 @@ def _s3123_ig_addons(wb, grid, params):
         for i, scen in enumerate([s for s in scens if s in fibl.index]):
             row = fibl.loc[scen]
             _cell(ws, r, 2, scen, alt=i % 2)
-            _cell(ws, r, 3, float(row.get("gross", 0) or 0), alt=i % 2, money=True)
-            _cell(ws, r, 4, float(row.get("qs_received", 0) or 0), alt=i % 2, money=True)
+            cbC = _cell(ws, r, 3, float(row.get("gross", 0) or 0), alt=i % 2, money=True)
+            _note(cbC, "FIBL direct book for this scenario. Reconcile on Per Layer "
+                       "(FIBL-direct layers) / Netting Waterfalls (FIBL block).")
+            cbD = _cell(ws, r, 4, float(row.get("qs_received", 0) or 0), alt=i % 2, money=True)
+            _note(cbD, "Intra-group QS RECEIVED from FUL + FIID (= the sum of their "
+                       "IGR QS Ceded on the Summary). Drill: Netting Waterfalls.")
             _cell(ws, r, 5, float(row.get("xol_received", 0) or 0), alt=i % 2, money=True)
-            _cell(ws, r, 6, float(row.get("s3123_qs", 0) or 0), alt=i % 2, money=True)
-            _cell(ws, r, 7, float(row.get("equity_usd", 0) or 0), alt=i % 2, money=True)
+            # S3123 QS & IG Equity are the SAME group add-ons as the FIHL block —
+            # reference those cells so they are keyed once, not re-baked here.
+            _fr = fihl_scen_row.get(scen)
+            if _fr:
+                _cell(ws, r, 6, f"=D{_fr}", alt=i % 2, money=True)
+                _cell(ws, r, 7, f"=E{_fr}", alt=i % 2, money=True)
+            else:
+                _cell(ws, r, 6, float(row.get("s3123_qs", 0) or 0), alt=i % 2, money=True)
+                _cell(ws, r, 7, float(row.get("equity_usd", 0) or 0), alt=i % 2, money=True)
             c = _cell(ws, r, 8, f"=SUM(C{r}:G{r})", alt=i % 2, bold=True)
             c.number_format = MONEY; c.alignment = Alignment(horizontal="right")
             r += 1
@@ -3448,6 +3542,16 @@ def write_results(path, per_layer, sw, mr, grid, params, source,
     # incomplete grid out-of-band). Passing the grid through write_results also
     # guarantees it is the same object the Summary reconciles against.
     wb = Workbook()
+    # Per-layer effective cession rates (per $ of exposure). These give the
+    # Summary & S3123 tabs a live SUMPRODUCT backbone: scenario cession =
+    # SUM(per-layer contribution x this rate). Guarded against per_sc<=0.
+    if "per_sc" in per_layer.columns:
+        per_layer = per_layer.copy()
+        _ps = per_layer["per_sc"].where(per_layer["per_sc"] > 0)
+        for _src, _dst in (("ext_qs", "ext_qs_pp"), ("igr_qs_ceded", "igr_ceded_pp"),
+                           ("s3123_qs", "s3123_qs_pp"), ("equity_usd", "equity_pp")):
+            if _src in per_layer.columns:
+                per_layer[_dst] = (per_layer[_src] / _ps).fillna(0.0)
     colmap, _ = _pl_map(per_layer)
     _cover(wb, params, per_layer, grid)
     _exec_summary(wb, grid, per_layer, params, source, recon, excluded, changes)
@@ -3455,7 +3559,7 @@ def write_results(path, per_layer, sw, mr, grid, params, source,
     # Build the S3123 & Equity (IG) tab FIRST so it is the single source of the
     # FIHL ex-add-on split; the Summary's memo columns reference it live. Final
     # tab order is imposed by the `order` list below, so build order is free.
-    addon_refs = _s3123_ig_addons(wb, grid, params)   # C1: manual-convention split
+    addon_refs = _s3123_ig_addons(wb, grid, params, per_layer)   # C1: split, live
     ws_sum = wb.create_sheet("Summary")
     summary_map = _summary(ws_sum, grid, params, source, per_layer,
                            addon_refs=addon_refs)
