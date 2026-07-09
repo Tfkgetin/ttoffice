@@ -13,8 +13,17 @@ as_at_date: "2026-07-01"
 # would pollute the prior and genuine movement would net to zero.
 # Retire these two keys once a persisted pipeline run exists to compare against
 # (i.e. from 2026Q2 onward, after this quarter's run is saved).
-prior_workbook: "output/2026-04-01/Space_RDS_results_2026-04-01.xlsx"   # the FILED Q1 auto book (update path to the final Q1 run)
-prior_as_at_label: "2026-04-01 (2026Q1 auto book)"
+# PRIOR SOURCE — for FIHL to compare like-for-like on the COMBINED basis (incl
+# S3123 QS + IG equity), the prior must carry those add-ons as values:
+#   * FILED MANUAL workbook (has 'Is Consortium' + 'Inward S3123 QS' + 'Equity
+#     Share USD' as values) → EXACT prior, reproduces JJ's Change Narrative to the
+#     dollar. RECOMMENDED — point prior_workbook at the filed Q1 manual book.
+#   * AUTO results book (Per Layer S3123/equity are uncached formulas → load as 0)
+#     → prior_seed.restore_addons() recomputes them from the engine, but can't
+#     recover consortium status for prior-only lapsed spacecraft, so FIHL/FIBL
+#     land ~2% light. Recalc-save the auto book in Excel to cache the true values.
+prior_workbook: "config/prior/Space_RDS_2026Q1_manual.xlsx"   # FILED Q1 MANUAL book — carries S3123/equity as values → exact combined prior
+prior_as_at_label: "2026-04-01 (2026Q1 filed manual)"
 
 # ---- Manual inclusions -----------------------------------------------------
 # UW-confirmed single layers to carry because their renewal is not yet bound /
@@ -75,24 +84,36 @@ renewal_rollforward:
     renewal_uw_status: "Bound (Signed Off)"
     renewal_snapshot: "2026-07-05"
     reason: "Turksat 6A renewal 341429 → 377766 — MGU split (2026-04-01→06-30, 0.5882) now added, so 377766 flows from source (~$9.12m); this is a self-retiring safety net (double-count safeguard skips it) — delete once a run confirms 377766 from source"
-  # PENDING UW SIGN-OFF — two whole-fleet renewals confirmed by data (J.Pbi
-  # 2026-07-05): both IsBound=0, Direct Open Market (no cession), signed=0 (no
-  # source exposure yet), every expiring layer points to the single successor.
-  # Uncomment each once the UW confirms the fleet renews (as JJ did for Eutelsat).
-  # ~$140m combined; verify the Arabsat prior-book count (6 birds vs 12 source
-  # expiring layers) with the UW before relying on it. Arabsat is at NBI stage
-  # (earlier/less certain) than Inmarsat GX (Quoted/Awaiting FOT).
-  # - {from_program: 344664, to_program: 382904, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", mapping_code: ASO, renewal_uw_status: "NBI", renewal_snapshot: "2026-07-05", reason: "Arabsat fleet renewal 344664 → 382904 — pending UW sign-off; unbound (NBI), carried at Q1 line size"}
-  # - {from_program: 343724, to_program: 385466, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", mapping_code: ASO, renewal_uw_status: "Quoted/Awaiting FOT", renewal_snapshot: "2026-07-05", reason: "Inmarsat GX fleet renewal 343724 → 385466 — pending UW sign-off; unbound (Quoted), carried at Q1 line size"}
+  # Arabsat 344664 → 382904: CARRIED for RDS (same treatment as Inmarsat below).
+  # Although 382904 shows IsBound=1 in Layer_Details_v (~$22.4m), it does NOT flow
+  # through the extract — the live run leaves all 6 Arabsat birds in 'Renewals in
+  # progress (unbound)' pointing to 382904 (~$55.4m at Q1 line size). This is the
+  # Turksat-class gate again: a Direct Open Market successor with no matching
+  # consortium / controlling-body row is dropped by the joins, so the successor
+  # never reaches the current book. We roll the Q1 fleet forward so RDS exposure
+  # is refreshed; the spacecraft-level safeguard auto-retires it the moment 382904
+  # actually flows from source. NB source ($22.4m) < carried Q1 line ($55.4m) — the
+  # carry is conservative; reconcile the size with the UW / fix the extract gate so
+  # 382904 flows at its true bound value.
+  - {from_program: 344664, to_program: 382904, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", mapping_code: ASO, renewal_uw_status: "NBI", renewal_snapshot: "2026-07-05", reason: "Arabsat fleet renewal 344664 → 382904 — in progress / not flowing from source (Direct Open Market gate); carried for RDS at Q1 line size; auto-retires when 382904 flows from source"}
+  #
+  # Inmarsat GX 343724 → 385466: CARRIED for RDS. The renewal is quoted / in
+  # progress but not yet bound or entered in source (J.Pbi 2026-07-05: IsBound=0,
+  # Direct Open Market, signed=0), every expiring layer points to the single
+  # successor 385466. For RDS we refresh exposure to reflect it as a renewal (the
+  # risk is live even before the bind lands). Carried at Q1 line size; the
+  # spacecraft-level safeguard auto-retires it once 385466 binds in source (you'll
+  # see "SKIPPED — renewal already bound in source"), so it can never double-count.
+  - {from_program: 343724, to_program: 385466, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", mapping_code: ASO, renewal_uw_status: "Quoted/Awaiting FOT", renewal_snapshot: "2026-07-05", reason: "Inmarsat GX fleet renewal 343724 → 385466 — in progress / unbound; carried for RDS at Q1 line size so exposure is refreshed; auto-retires when 385466 binds in source"}
 
 # ---- Renewal overrides -----------------------------------------------------
 # UW-confirmed old→new programme links the J.Pbi 'Renewed To' pointer doesn't
 # carry (e.g. a fleet that re-attaches under a new programme with different ids).
 # CLASSIFICATION ONLY — reclassifies Book Movement, never injects exposure. If
-# the 'to_program' is already in the current book, the expiring layer moves to
-# the 'Renewed — covered in the book' table (out of Lapsed); if not, it reads as
-# a renewal in progress. Use renewal_rollforward (not this) to actually CARRY a
-# renewal that isn't in source.
+# the 'to_program' is already in the current book, the expiring layers are
+# excluded from ALL Book Movement tables (not a loss, not a gap — non-event);
+# if not, they read as a renewal in progress. Use renewal_rollforward (not this)
+# to actually CARRY a renewal that isn't in source.
 renewal_overrides:
   # WorldView / Maxar Legion Fleet 341568 (expired 2026-05-02) → Legion
   # Satellites In-Orbit Fleet 369418 (bound, in the book, ~$90m signed). Covered
@@ -297,11 +318,14 @@ data_corrections:
 # is actually fine (covered elsewhere / self-insured / renews next quarter).
 reconciliation_notes:
   # UW disposition of 2026Q2 "No renewal pointer" lapses (Teams, 2026-07):
-  - {program_id: 341568, category: "Lapse — covered elsewhere", date_logged: "2026Q2", note: "WorldView / Maxar Legion Fleet 341568 (expired 2026-05-02) continues as 369418 'Legion Satellites In-Orbit Fleet'. VERIFIED in the book: 369418 = 12 ASO / Direct Open Market layers, IsBound=1, on-risk 2026-02-05→2027-02-04, ~$90m signed. Covered and counted under 369418 — do NOT roll forward (double-count). The Book Movement 'lapsed' line for 341568 is display-only (renewal pointer unset in J.Pbi)."}
+  - {program_id: 341568, category: "Lapse — covered elsewhere", date_logged: "2026Q2", note: "WorldView / Maxar Legion Fleet 341568 (expired 2026-05-02) continues as 369418 'Legion Satellites In-Orbit Fleet'. VERIFIED in the book: 369418 = 12 ASO / Direct Open Market layers, IsBound=1, on-risk 2026-02-05→2027-02-04, ~$90m signed. Covered and counted under 369418 — do NOT roll forward (double-count). Set via renewal_overrides (J.Pbi pointer absent for this programme change): 341568 is excluded from all Book Movement tables — it is a non-event."}
   - {program_id: 278759, category: "Lapse — genuine (self-insured)", date_logged: "2026Q2", note: "SXM-10 / Sirius XM do not buy in-orbit insurance — genuine non-renewal, no policy to renew. Correctly off the book; expected lapse each quarter (do not chase)."}
   - {program_id: 277977, category: "Lapse — genuine (self-insured)", date_logged: "2026Q2", note: "SXM-10 (2nd programme) — Sirius XM self-insure in-orbit; genuine non-renewal."}
-  - {program_id: 328274, category: "Lapse — future renewal", date_logged: "2026Q2", note: "Spainsat NG-1 renews 2026-08-01 (after the 1-July as-at) — legitimately off the book for 2026Q2, returns in 2026Q3. Not a loss, a timing gap."}
-  - {program_id: 334082, category: "Lapse — future renewal", date_logged: "2026Q2", note: "Spainsat NG-1 (2nd programme) — renewal 2026-08-01; off-book for Q2, returns Q3."}
+  - {program_id: 328274, category: "Lapse — future renewal", date_logged: "2026Q2", note: "Spainsat NG-1 renews 2026-08-01 (after the 1-July as-at) — legitimately off the book for 2026Q2, returns in 2026Q3. Not a loss, a timing gap. NOT carried (not on-risk this quarter — carrying it would overstate)."}
+  - {program_id: 334082, category: "Lapse — future renewal", date_logged: "2026Q2", note: "Spainsat NG-1 (2nd programme) — renewal 2026-08-01; off-book for Q2, returns Q3. NOT carried."}
+  - {program_id: 343724, category: "Renewal — in progress, carried for RDS", date_logged: "2026Q2", note: "Inmarsat GX 343724 renews to 385466 (Quoted/Awaiting FOT). Not yet bound / not in source as-at (J.Pbi 2026-07-05: IsBound=0, signed=0), but the renewal is live — for RDS the exposure is refreshed by carrying the Q1 fleet forward via renewal_rollforward (343724 → 385466). Shows in the Renewals table, not Pending. Auto-retires (safeguard skips it) once 385466 binds in source."}
+  - {program_id: 344664, category: "Renewal — in progress, carried for RDS", date_logged: "2026Q2", note: "Arabsat 344664 renews to 382904 (6 birds, ~$55.4m at Q1 line). 382904 shows IsBound=1 in Layer_Details_v (~$22.4m) but does NOT flow through the extract — a Direct Open Market successor with no matching consortium/controlling-body row is dropped by the joins (Turksat-class gate), so all 6 birds sit in 'Renewals in progress (unbound)'. Carried forward via renewal_rollforward (344664 → 382904) so RDS exposure is refreshed; auto-retires once 382904 flows from source. NOTE: source bound value ($22.4m) < carried Q1 line ($55.4m) — reconcile size with UW / fix the extract gate."}
+  - {program_id: 328274, category: "Methodology — FIBL Max Risk basis (UW-confirmed)", date_logged: "2026Q2", note: "FIBL Max Risk = the single spacecraft FIBL RECEIVES the most on (SPAINSAT NG-2): IGR QS 18,088,787 + S3123 QS 2,216,763 + IG equity 1,097,298 = 21,402,848 — every component that one bird's own cession (Basis B, UW-confirmed 2026Q2). Prior auto book picked the group's largest-GROSS bird (SXM-10, a FUL bird) and showed FIBL's thin IGR slice (12,799,987) — a defect, corrected in netting.fibl_maxrisk_multiplier. The filed 2026Q1 manual keyed 22,946,346 by stitching SPAINSAT NG-1's larger IGR (19,623,187) onto NG-2's S3123/equity (Summary!F99 = Q36+D45+D55+D36) — a component-wise max across three birds, not a single loss; intentionally superseded. Change Narrative prior is recomputed on Basis B so the Δ is like-for-like."}
 
 # ---- Entities --------------------------------
 entities: ["FIHL", "FUL", "FIID", "FIBL"]
@@ -362,8 +386,19 @@ s3123_rds:
   scenarios:
     proton_flare:   { type: full,         orbits: ["GEO-GSO"],                          loss: 0.05 }
     space_weather:  { type: bus_type_top, top_n: 4,                                     loss: 1.00 }
-    generic_defect: { type: top_n_risks,  top_n: 10, orbits: ["GEO-GSO", "MEO"],        loss: 0.50, apply_rpf: true }
-    space_debris:   { type: orbit_group,  orbits: ["LEO"],                              apply_rpf: true }   # share * RPF — method open (O1)
+    # JJ's FILED basis (per vw_SpaceRDS_Generic_Defect_Lloyds): sum of the TOP 10
+    # satellite losses = exposure x risk_factor(RPF) x loss_rate(0.50). His
+    # Change-Narrative wording ("largest manufacturer") is misleading — the view
+    # sums the top-10, so that is what we mirror. (SEP validated to ~$1; GD/SD
+    # tie exactly once the run reads JJ's Lloyd's population — see the sub-views.)
+    generic_defect: { type: top_n_risks, top_n: 10, orbits: ["GEO-GSO", "MEO"],         loss: 0.50, apply_rpf: true }
+    # JJ's filed basis: 100% of LEO in the worst orbit range (RPF-adj), MAX of
+    # the altitude groups. Group 1 = 600±200 (400-800 km), Group 2 = 1400±200
+    # (1200-1600 km) per rds.params_lloyds_proton_flare_altitude. Uses altitude_km
+    # (ingest attaches it); falls back to all-LEO if altitude is missing.
+    space_debris:   { type: orbit_group,  orbits: ["LEO"],                              apply_rpf: true,
+                      altitude_groups: [ { name: "Group 1", low: 400,  high: 800 },
+                                         { name: "Group 2", low: 1200, high: 1600 } ] }
 
   # Lloyd's population + bus type come from the Lloyd's views (same database).
   # NOTE (O1): the 2026Q1 run computed shares from the consortium-factor
@@ -374,9 +409,69 @@ s3123_rds:
   # bus-type join the SW cell renders "n/a" (it printed $0 in the shipped
   # book; the sheet now flags it instead).
   lloyds_source:
-    bus_type_view:   "rds.vw_SpaceRDS_All_Lloyds_RDS"        # layer -> Lloyds Bus Type
+    # PREFERRED: a spacecraft-keyed query (Bus Type × Bus Manufacturer -> Lloyd's
+    # bus-type group, + latest altitude). Avoids the broken vw_SpaceRDS_*_Lloyds
+    # views; drives Space Weather (bus type) and Space Debris (altitude groups).
+    spacecraft_attrs_query_file: "sql/lloyds_spacecraft_attrs.sql"
+    bus_type_view:   "rds.vw_SpaceRDS_All_Lloyds_RDS"        # (fallback; mis-named)
     population_view: "rds.vw_SpaceRDS_SpaceWeather_Lloyds"   # S3123 on-risk population
     fallback_mapping_csv: null                              # optional CSV: layer_key,lloyds_bus_type
+
+  # Lloyd's RDS Summary — JJ's filed deliverable, integrated as the workbook's
+  # LAST tab. The RDS methodology lives in these two pre-computed DB views, so
+  # the tab reads them verbatim and ties to his 'Lloyds RDS Summary-final' to
+  # the dollar (no re-derivation). rds_view = the 4 headline RDS
+  # (RDS_Name / RDS_Value / Breaches_Risk_Appetite); space_weather_view = the
+  # bus-type block (Bus Type / Aggregate / Top 4 / > Risk Appetite).
+  # NB these are the CORRECT view roles — `lloyds_source.bus_type_view` above is
+  # mis-named (it points at the 4-RDS summary, not a layer->bus-type map, which
+  # is why Space Weather on the computed S3123 tab renders n/a).
+  lloyds_summary:
+    enabled: true
+    rds_view:            "rds.vw_SpaceRDS_All_Lloyds_RDS"
+    space_weather_view:  "rds.vw_SpaceRDS_SpaceWeather_Lloyds"
+    risk_appetite_usd: 50000000              # rds.params_Risk_Appetite_Lloyds — flags breaches
+    # One-line Q-on-Q narrative rendered under the RDS table (edit per quarter).
+    qoq_note: >-
+      Q-on-Q: the S3123 consortium sub-share stepped down from 15/30 (0.500) to
+      10/30 (0.333) for inceptions on/after 2026-04-01, so the renewed GEO fleet
+      (Eutelsat / Inmarsat GX / Arabsat / Turksat, carried in at 2026-07-01) is
+      refreshed but written on the lower 0.333 syndicate line — Solar-particle
+      and Design-deficiency fall despite the renewals. Space Debris reflects LEO
+      run-off; Generic Defect the top-10 reselection. No RDS breaches appetite.
+    # Per-RDS change narrative (gross + net drivers) — edit per quarter.
+    change_narrative:
+      "Proton Flare": >-
+        Gross −$3.54m (−19%): the renewed GEO consortium fleet (Eutelsat, Inmarsat
+        GX, Arabsat, Turksat) is carried in on the reduced 10/30 (0.333) S3123
+        sub-share vs 15/30 (0.500) last quarter — the same fleet writes a smaller
+        syndicate line. Net −$3.13m (−21%): net falls a little further than gross
+        as excluded, 100%-retained birds (chiefly Spainsat NG-1, which renews
+        1-Aug and is off-book this quarter) leave the population, so the 20% QS to
+        IG bites more fully (net/gross 0.82 → 0.80).
+      "Space Weather": >-
+        Gross −$6.03m (−14%): binding bus type unchanged (Airbus Eurostar
+        3000/NEO); the top-4 exposures fall on the same 0.500 → 0.333 share
+        step-down. Net −$7.04m (−20%): net drops further as the previously
+        100%-retained excluded birds leave the top-4, so the 20% QS applies more
+        fully (net/gross 0.85 → 0.80).
+      "Generic Defect": >-
+        Gross +$2.37m (+17%): the top-10 GEO/MEO losses reselect — renewed and
+        added GEO exposure and the RPF profile push larger risks into the top-10,
+        outweighing the lower share. Net +$1.70m (+15%): net rises broadly in line
+        with gross at ~0.82 retention.
+      "Space Debris": >-
+        Gross −$7.45m (−36%): LEO run-off — WorldView / Maxar Legion re-attach to
+        the in-orbit fleet elsewhere and other LEO layers expire, shrinking the
+        worst orbit-range group (Group 1). Net −$5.96m (−36%): net moves in line
+        with gross at the full 20% QS (no excluded LEO birds).
+    # JJ's filed 2026Q1 Lloyd's RDS — shown as the prior column on the tab.
+    previous_quarter_label: "2026Q1 (JJ filed)"
+    previous_quarter:
+      "Proton Flare":   { gross: 18601901, net: 15244128 }   # SEP — 5% all GEO
+      "Space Weather":  { gross: 41626793, net: 35518198 }   # Design deficiency
+      "Generic Defect": { gross: 13946588, net: 11613333 }
+      "Space Debris":   { gross: 20781208, net: 16624966 }
 
   # manual_compare: RETIRED from 2026Q2 - there is no manual book to tie to.
   # The S3123 RDS tab renders without the reconciliation block.

@@ -52,6 +52,36 @@ def scenario_multipliers(df: pd.DataFrame, p, entity: str | None = None) -> dict
     return m
 
 
+def fibl_maxrisk_multiplier(df: pd.DataFrame):
+    """Max Risk multiplier for FIBL: the single on-risk spacecraft FIBL RECEIVES
+    the most on — IGR QS ceded up from FUL/FIID + S3123 QS + IG equity + any
+    direct FIBL line. FIBL is the internal RI receiver, so its worst single-
+    satellite loss is the internally-ceded bird, NOT the group's largest-GROSS
+    bird (which the entity=None Max Risk pick hands it — e.g. SXM-10, a FUL bird,
+    of which FIBL only receives a thin IGR slice). Ranking AND value then use the
+    SAME bird, so the figure is a coherent single-satellite loss — every
+    component is that one bird's own cession.
+
+    (Basis B, UW-confirmed 2026Q2: reproduces SPAINSAT NG-2 receiver 21,402,848
+    on the 2026Q1 manual Input Data. The filed manual's 22,946,346 instead
+    stitched the max IGR of SPAINSAT NG-1 onto NG-2's S3123/equity — not a single
+    loss; superseded.)
+
+    Returns (multiplier_series, spacecraft_name), or (None, None) if empty.
+    """
+    flag = df["on_risk_flag"] == 1
+    equity = df.get("equity_usd", 0.0)
+    received = (df["igr_qs_ceded"].fillna(0)
+                + df["s3123_qs"].fillna(0)
+                + (equity.fillna(0) if hasattr(equity, "fillna") else equity)
+                + df["per_sc"] * df["entity"].eq("FIBL"))
+    sc = (received * flag).groupby(df["spacecraft_name"]).sum()
+    if not len(sc) or sc.max() <= 0:
+        return None, None
+    biggest = sc.idxmax()
+    return df["spacecraft_name"].eq(biggest).astype(float) * flag, biggest
+
+
 def _net(df: pd.DataFrame, m: pd.Series, entity: str, p) -> dict:
     """Layer-exact waterfall for one entity × scenario multiplier."""
     e = df["entity"].eq(entity)
@@ -169,11 +199,21 @@ def entity_scenario_netting(df: pd.DataFrame, p) -> pd.DataFrame:
     msg = scenario_multipliers(df, p, entity=None)
     gdetails = {"Space Weather": msg.pop("_sw_detail", None),
                 "Max Risk": msg.pop("_mr_detail", None)}
+    fibl_mr_m, fibl_mr_sc = fibl_maxrisk_multiplier(df)
     for scen, m in msg.items():
         ff = _fihl_fibl(df, m, p)
-        for ent in ("FIHL", "FIBL"):
+        rows.append({"scenario": scen, "detail": gdetails.get(scen),
+                     **ff["FIHL"]})
+        # FIBL Max Risk uses its OWN receiver-ranked bird (SPAINSAT NG-2), not
+        # the group's largest-gross pick (SXM-10) the other scenarios share.
+        # See fibl_maxrisk_multiplier: value and label are the same single bird.
+        if scen == "Max Risk" and fibl_mr_m is not None:
+            ff_fibl = _fihl_fibl(df, fibl_mr_m, p)
+            rows.append({"scenario": scen, "detail": fibl_mr_sc,
+                         **ff_fibl["FIBL"]})
+        else:
             rows.append({"scenario": scen, "detail": gdetails.get(scen),
-                         **ff[ent]})
+                         **ff["FIBL"]})
     return pd.DataFrame(rows)
 
 

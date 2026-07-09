@@ -63,8 +63,42 @@ def scenario_changes(cur_grid: pd.DataFrame, prior_grid: pd.DataFrame) -> pd.Dat
     (internal RI receiver) — so the Changes matrix and the by-scenario net/gross
     tables show the complete entity picture.
     """
-    def keyed(g, field):
-        return g.set_index([g["entity"], g["scenario"]])[field]
+    def val(df, f):
+        if len(df) and f in df and pd.notna(df.iloc[0][f]):
+            return float(df.iloc[0][f])
+        return None
+
+    # Mirror prior_seed._with_exec so this fallback path shows the SAME headline
+    # basis as the frozen-workbook path: FIHL gross = combined (incl S3123 QS +
+    # equity), FIBL gross/net = internal receiver. Without this, FIBL would show
+    # its ~0 direct-book net (blank prior net) and no exec-gross column.
+    def _exec_gross(df, entity):
+        if entity == "FIHL":
+            v = val(df, "gross_incl_addons")
+            if v is not None:
+                return v
+        if entity == "FIBL":
+            v = val(df, "gross_receiver")
+            if v is not None:
+                return v
+        return val(df, "gross")
+
+    def _head_net(df, entity):
+        # FIBL headline net is the receiver net (matches its receiver gross);
+        # its direct-book net is ~0. FIHL headline net is COMBINED (incl S3123
+        # QS + IG equity) to match its combined gross — without this FIHL net
+        # would show ex-add-on against a combined gross (the basis mismatch that
+        # made prior/current net wrong). FUL/FIID keep their standard net.
+        if entity == "FIBL":
+            v = val(df, "net_receiver")
+            if v is not None:
+                return v
+        if entity == "FIHL":
+            v = val(df, "net_incl_addons")
+            if v is not None:
+                return v
+        return val(df, "net")
+
     rows = []
     for entity in ["FIHL", "FUL", "FIBL", "FIID"]:
         for scen in SCEN_ORDER:
@@ -74,15 +108,13 @@ def scenario_changes(cur_grid: pd.DataFrame, prior_grid: pd.DataFrame) -> pd.Dat
                             (prior_grid["scenario"] == scen)]
             if not len(cg) and not len(pg):
                 continue
-            def val(df, f):
-                if len(df) and f in df and pd.notna(df.iloc[0][f]):
-                    return float(df.iloc[0][f])
-                return None
             cgr, pgr = val(cg, "gross"), val(pg, "gross")
-            cnet, pnet = val(cg, "net"), val(pg, "net")
+            cnet, pnet = _head_net(cg, entity), _head_net(pg, entity)
+            ceg, peg = _exec_gross(cg, entity), _exec_gross(pg, entity)
             rows.append({
                 "entity": entity, "scenario": scen,
                 "cur_gross": cgr, "prior_gross": pgr,
+                "cur_gross_exec": ceg, "prior_gross_exec": peg,
                 "d_gross": (cgr - pgr) if None not in (cgr, pgr) else None,
                 "d_gross_pct": ((cgr - pgr) / pgr) if (pgr) else None,
                 "cur_net": cnet, "prior_net": pnet,

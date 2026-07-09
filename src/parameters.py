@@ -30,7 +30,9 @@ class Params:
 
     @classmethod
     def load(cls, path: str) -> "Params":
-        with open(path) as f:
+        # Always UTF-8: the config carries em-dashes / arrows in comments, and
+        # Windows would otherwise default to cp1252 and crash on those bytes.
+        with open(path, encoding="utf-8") as f:
             c = yaml.safe_load(f)
         return cls(
             quarter=c["quarter"],

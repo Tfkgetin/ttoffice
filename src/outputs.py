@@ -63,6 +63,9 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
         try:
             from . import prior_seed, netting as _net
             prior_layers = prior_seed.load_prior_workbook(prior_wb)
+            # Restore prior S3123/equity add-ons if the auto book cached them as
+            # formulas — keeps the FIHL combined prior on the same basis as current.
+            prior_layers = prior_seed.restore_addons(prior_layers, per_layer, params)
             prior_grid = _net.summary_grid(prior_layers, params)
             label = params.raw.get("prior_as_at_label") or "prior (frozen workbook)"
             frozen_chg = prior_seed.build_changes(per_layer, summary,
@@ -132,6 +135,37 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
         s3123_sheet.write_s3123_sheet(
             _wb, s3grid, rec, as_at=str(params.as_at), qoq=s3_qoq)
         _wb.save(_fp)
+
+    # Lloyd's RDS Summary (JJ's filed deliverable) — the workbook's LAST tab.
+    # Rendered from the pipeline's COMPUTED S3123 grid (gross + net), so it does
+    # not depend on the Lloyd's SQL views (which currently error in SQL). The
+    # bus-type block is enriched from vw_SpaceRDS_SpaceWeather_Lloyds when that
+    # view is readable; otherwise it shows a banner. Added after every other
+    # sheet so it lands last.
+    if s3grid is not None and (params.raw.get("s3123_rds") or {}).get("enabled"):
+        from . import lloyds_sheet
+        import openpyxl as _opx2
+        views = ingest_mod.load_lloyds_rds_summary(params)   # may be None (view broken)
+        sw_view = (views or {}).get("space_weather")
+        lcfg = (params.raw.get("s3123_rds") or {}).get("lloyds_summary", {})
+        # prior = JJ's filed previous-quarter RDS ({scenario: {gross, net}})
+        s3_prior = dict(lcfg.get("previous_quarter") or {})
+        if s3_prior:
+            s3_prior["_label"] = lcfg.get("previous_quarter_label", "prior")
+        appetite = lcfg.get("risk_appetite_usd")
+        _fpl = str(out / f"Space_RDS_results_{params.as_at}.xlsx")
+        _wbl = _opx2.load_workbook(_fpl)
+        lloyds_sheet.write_lloyds_rds_summary(
+            _wbl, s3grid, as_at=str(params.as_at), sw_view=sw_view,
+            risk_appetite=appetite, prior=s3_prior,
+            qoq_note=lcfg.get("qoq_note"), params=params,
+            change_narrative=lcfg.get("change_narrative"))
+        # The computed 'S3123 RDS' tab is superseded by the Lloyd's Summary —
+        # keep it in the file (audit) but hide it from view.
+        if "S3123 RDS" in _wbl.sheetnames:
+            _wbl["S3123 RDS"].sheet_state = "hidden"
+        _wbl.save(_fpl)
+        print("      Lloyd's RDS Summary tab written (last tab); S3123 RDS hidden")
 
     # persist this run so future quarters can diff against it
     persist.save_run(params, per_layer, summary)

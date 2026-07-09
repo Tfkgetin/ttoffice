@@ -260,48 +260,57 @@ def linkify_netting(wb, sheet="Netting Waterfalls", summary="Summary"):
         b = bases.get(entity)
         return None if b is None else b + SCEN_ORDER.index(scen)
 
-    # --- combined gross/net table: find the two basis blocks ----------------
-    # header row has 'Scenario | Basis | FIHL | FUL | FIBL | FIID'
-    hdr = None
+    # --- combined gross / net tables ----------------------------------------
+    # Two stacked tables built by _waterfalls, each headed
+    #   'Scenario | FIHL | FUL | FIBL | FIID'  (cols 2..6, FIHL in col 3)
+    # with the basis ('gross' / 'net') in the section title above each header.
+    # Link every entity cell to the canonical Summary cascade so the tab is a
+    # formula-linked view of Summary. NB FIHL mirrors Summary's COMBINED basis
+    # (incl S3123 QS + IG equity) — the book-wide FIHL headline convention.
+    ent_col = {"FIHL": 3, "FUL": 4, "FIBL": 5, "FIID": 6}
     for r in range(1, ws.max_row + 1):
-        if (ws.cell(row=r, column=2).value == "Scenario"
-                and ws.cell(row=r, column=4).value == "FIHL"):
-            hdr = r
-            break
-    if hdr:
-        ent_col = {"FIHL": 4, "FUL": 5, "FIBL": 6, "FIID": 7}
-        for r in range(hdr + 1, ws.max_row + 1):
-            scen = ws.cell(row=r, column=2).value
-            basis = ws.cell(row=r, column=3).value
-            if scen not in SCEN_ORDER or basis not in ("Gross", "Net"):
-                continue
-            scol = "D" if basis == "Gross" else "J"   # Summary Gross / Net
+        if not (ws.cell(row=r, column=2).value == "Scenario"
+                and ws.cell(row=r, column=3).value == "FIHL"):
+            continue
+        basis = None
+        for rr in range(r - 1, max(0, r - 4), -1):
+            t = str(ws.cell(row=rr, column=2).value or "").lower()
+            if "gross" in t:
+                basis = "Gross"; break
+            if "net" in t:
+                basis = "Net"; break
+        scol = "J" if basis == "Net" else "D"       # Summary Net / Gross
+        rr = r + 1
+        while rr <= ws.max_row and ws.cell(row=rr, column=2).value in SCEN_ORDER:
+            scen = ws.cell(row=rr, column=2).value
             for ent, c in ent_col.items():
                 sr = srow(ent, scen)
                 if sr:
-                    ws.cell(row=r, column=c).value = f"=Summary!{scol}{sr}"
+                    ws.cell(row=rr, column=c).value = f"=Summary!{scol}{sr}"
+            rr += 1
 
     # --- cede-down detail blocks: link each step to Summary -----------------
-    # step offsets from the 'Gross Loss' row of a block
-    # 0 Gross Loss · 1 less External QS · 2 less Other Ext RI ·
-    # 3 less QS Ceded to FIBL · 4 less XoL Ceded to FIBL · 5 Net (sum)
+    # Four blocks per scenario at label/amount column pairs:
+    #   (2,3) FIHL · (5,6) FUL · (8,9) FIBL · (11,12) FIID
+    # step offsets from the 'Gross Loss' row: 0 Gross · 1 less Ext QS ·
+    # 2 less Other Ext RI · 3 less QS to FIBL · 4 less XoL to FIBL · 5 Net.
+    # The Net row is already a live =SUM(...) written by the builder — leave it.
     for r in range(1, ws.max_row + 1):
-        for label_col, amt_col in ((2, 3), (5, 6)):       # FUL block, FIID block
+        for label_col, amt_col in ((2, 3), (5, 6), (8, 9), (11, 12)):
             if ws.cell(row=r, column=label_col).value != "Gross Loss":
                 continue
-            head = ws.cell(row=r - 2, column=label_col).value or ""
-            entity = next((e for e in ("FUL", "FIID") if str(head).startswith(e)), None)
-            scen = next((s for s in SCEN_ORDER if s in str(head)), None)
+            head = str(ws.cell(row=r - 2, column=label_col).value or "")
+            entity = next((e for e in ("FIHL", "FUL", "FIBL", "FIID")
+                           if head.startswith(e)), None)
+            scen = next((s for s in SCEN_ORDER if s in head), None)
             sr = srow(entity, scen) if entity and scen else None
             if not sr:
                 continue
-            ac = _col_letter(amt_col)
             ws.cell(row=r, column=amt_col).value = f"=Summary!D{sr}"            # Gross
             ws.cell(row=r + 1, column=amt_col).value = f"=-Summary!E{sr}"       # less Ext QS
             ws.cell(row=r + 2, column=amt_col).value = 0                        # Other Ext RI
             ws.cell(row=r + 3, column=amt_col).value = f"=-Summary!G{sr}"       # less IGR QS
             ws.cell(row=r + 4, column=amt_col).value = f"=-Summary!I{sr}"       # less XoL
-            ws.cell(row=r + 5, column=amt_col).value = f"=SUM({ac}{r}:{ac}{r+4})"  # Net (waterfall)
 
     # --- chart scaffold (Step | Source | Base | Decrease | Total) ------------
     # link Source to Summary so the floating-waterfall mini-chart is live
@@ -432,22 +441,22 @@ def linkify_portfolio(wb, sheet="Portfolio", per_layer="Per Layer", changes="Cha
         return
     ws = wb[sheet]
     pl = f"'{per_layer}'"
-    have_changes = changes in wb.sheetnames
 
-    # exposure bridge: Opening / +New / -Run-off / Reval / Closing in col D
+    # Renewal-aware exposure bridge (Opening / +New / ↻Renewals / −Lapsed /
+    # ±Reval / Closing). The New/Renewed/Lapsed split is spacecraft-level
+    # (renewals.split_movement) so a roll-forward renewal nets out instead of
+    # showing as run-off + new business — that pairing can't be a simple
+    # cross-sheet formula, so the component values are engine-computed here.
+    # Keep the structural bits live: Closing = SUM of the movement rows, and
+    # each movement's % of opening.
     op = next((r for r in range(1, ws.max_row + 1)
                if str(ws.cell(row=r, column=2).value or "").startswith("Opening in-force")), None)
-    if op:
-        new_r, run_r, rev_r, close_r = op + 1, op + 2, op + 3, op + 4
-        if have_changes:
-            c_new = _find_row(wb[changes], 2, "New exposure")
-            c_drop = _find_row(wb[changes], 2, "Dropped exposure")
-            if c_new:
-                ws.cell(row=new_r, column=4).value = f"=Changes!C{c_new}"
-            if c_drop:
-                ws.cell(row=run_r, column=4).value = f"=-Changes!C{c_drop}"
-        ws.cell(row=close_r, column=4).value = f"=SUM(D{op}:D{rev_r})"
-        for rr in (new_r, run_r, rev_r):
+    close_r = next((r for r in range(1, ws.max_row + 1)
+                    if str(ws.cell(row=r, column=2).value or "").startswith("Closing in-force")), None)
+    if op and close_r and close_r > op + 1:
+        last_move = close_r - 1                       # ± Revaluation row
+        ws.cell(row=close_r, column=4).value = f"=SUM(D{op}:D{last_move})"
+        for rr in range(op + 1, last_move + 1):
             ws.cell(row=rr, column=5).value = f"=IFERROR(D{rr}/$D${op},0)"
 
     # UW-year table: rows under 'UW Year' header — SUMPRODUCT on inception year
@@ -487,7 +496,8 @@ def linkify_portfolio(wb, sheet="Portfolio", per_layer="Per Layer", changes="Cha
 # --------------------------------------------------------------------------- #
 #  Changes  →  Δ and Δ% columns (current − prior)                               #
 # --------------------------------------------------------------------------- #
-def linkify_changes(wb, sheet="Changes"):
+def linkify_changes(wb, sheet="Changes", summary="Summary",
+                    per_layer="Per Layer", params="Parameters"):
     if sheet not in wb.sheetnames:
         return
     ws = wb[sheet]
@@ -502,6 +512,284 @@ def linkify_changes(wb, sheet="Changes"):
                 ws.cell(row=rr, column=7).value = f"=IFERROR((D{rr}-E{rr})/E{rr},0)"
                 rr += 1
 
+    # De-hardcode the 'Current' column of the by-scenario blocks by linking it to
+    # the canonical Summary cascade (the current run IS Summary). 'Prior' stays a
+    # value — the prior quarter is not a workbook tab. Only cells that equal
+    # Summary are linked, so no number moves:
+    #   • Current Net  → Summary!J for every entity (net ties across the book)
+    #   • Current Gross → Summary!D for FUL / FIID only. FIHL & FIBL carry the
+    #     raw (ex-add-on / pre-receiver) gross here, which deliberately differs
+    #     from Summary's combined display, so those stay as values.
+    if summary not in wb.sheetnames:
+        return
+    bases = _summary_bases(wb[summary])
+    if "FIHL" not in bases:
+        return
+
+    def srow(ent, scen):
+        b = bases.get(ent)
+        return None if (b is None or scen not in SCEN_ORDER) else b + SCEN_ORDER.index(scen)
+
+    for r in range(1, ws.max_row + 1):
+        if not (str(ws.cell(row=r, column=2).value or "") == "Entity"
+                and str(ws.cell(row=r, column=3).value or "") == "Scenario"):
+            continue
+        d = str(ws.cell(row=r, column=4).value or "")
+        if not d.startswith("Current"):
+            continue
+        is_net = "Net" in d
+        scol = "J" if is_net else "D"
+        rr = r + 1
+        while rr <= ws.max_row:
+            ent = ws.cell(row=rr, column=2).value
+            scen = ws.cell(row=rr, column=3).value
+            sr = srow(ent, scen) if ent in bases else None
+            if sr is None:
+                break
+            if is_net or ent in ("FUL", "FIID"):
+                ws.cell(row=rr, column=4).value = f"=Summary!{scol}{sr}"
+            rr += 1
+
+    # ---- Aggregated-exposure 'Current' block → live SUMIFS on Per Layer -------
+    # The 'Prior' block stays a value (external quarter, no tab). The 'Current'
+    # block (by orbit × entity) is a live SUMIFS on Per Layer, with the derived
+    # columns built from the orbit sums (Total = GEO+MEO+LEO, GD-eligible =
+    # GEO+MEO, PF-eligible = GEO, SD orbit-weighted = GEO·dr+MEO·dr+LEO·dr from
+    # the Parameters damage ratios). Arithmetic verified against the baked values.
+    if per_layer not in wb.sheetnames:
+        return
+    PL = f"'{per_layer}'"
+    ENT, ORB, PSC = "C", "G", "L"
+    dr = {}
+    if params in wb.sheetnames:
+        pw = wb[params]
+        dr["GEO"] = _label_cell_ref(pw, "Space Debris damage ratio — GEO-GSO")
+        dr["MEO"] = _label_cell_ref(pw, "Space Debris damage ratio — MEO")
+        dr["LEO"] = _label_cell_ref(pw, "Space Debris damage ratio — LEO")
+
+    def _orb(ent, pat):
+        return (f'SUMIFS({PL}!{PSC}:{PSC},{PL}!{ENT}:{ENT},"{ent}",'
+                f'{PL}!{ORB}:{ORB},"{pat}")')
+
+    for r in range(1, ws.max_row + 1):
+        if not (str(ws.cell(row=r, column=2).value or "") == "Current"
+                and str(ws.cell(row=r, column=3).value or "") == "GEO-GSO"):
+            continue
+        rows = {}
+        rr = r + 1
+        while rr <= ws.max_row:
+            lbl = str(ws.cell(row=rr, column=2).value or "")
+            if not lbl or lbl.startswith("Δ"):
+                break
+            rows[lbl.split()[0]] = rr
+            rr += 1
+        for key, rw in rows.items():
+            if key in ("FUL", "FIID", "FIBL"):
+                ws.cell(row=rw, column=3).value = f"={_orb(key, '*GEO*')}"
+                ws.cell(row=rw, column=4).value = f"={_orb(key, '*MEO*')}"
+                ws.cell(row=rw, column=5).value = f"={_orb(key, '*LEO*')}"
+            elif key == "FIHL":                       # FIHL (FUL+FIID)
+                a, b = rows.get("FUL"), rows.get("FIID")
+                if a and b:
+                    for col in (3, 4, 5):
+                        L = _col_letter(col)
+                        ws.cell(row=rw, column=col).value = f"={L}{a}+{L}{b}"
+            elif key == "Whole":                      # Whole portfolio
+                parts = [rows.get(e) for e in ("FUL", "FIID", "FIBL") if rows.get(e)]
+                for col in (3, 4, 5):
+                    L = _col_letter(col)
+                    ws.cell(row=rw, column=col).value = "=" + "+".join(
+                        f"{L}{x}" for x in parts)
+            # derived columns (built from the orbit sums just set)
+            ws.cell(row=rw, column=6).value = f"=C{rw}+D{rw}+E{rw}"   # Total
+            ws.cell(row=rw, column=8).value = f"=C{rw}+D{rw}"         # GD eligible (GEO+MEO)
+            ws.cell(row=rw, column=9).value = f"=C{rw}"               # PF eligible (GEO)
+            if dr.get("GEO") and dr.get("MEO") and dr.get("LEO"):
+                ws.cell(row=rw, column=7).value = (
+                    f"=C{rw}*{dr['GEO']}+D{rw}*{dr['MEO']}+E{rw}*{dr['LEO']}")
+
+    # ---- Exposure-bridge 'Check vs current book' + RPF-adjusted 'Current' -----
+    # Both are pure current-book figures — link them so they can never go stale.
+    #   Check vs current book = SUM of Per Layer per_sc (the whole book).
+    #   RPF-adjusted 'Current' = SUMPRODUCT(per_sc × rpf) by orbit group; the
+    #   Per Layer rpf column is itself a live formula, so this ties to the engine.
+    n = wb[per_layer].max_row
+    L_rng, K_rng, G_rng = (f"{PL}!{PSC}2:{PSC}{n}", f"{PL}!K2:K{n}",
+                           f"{PL}!{ORB}2:{ORB}{n}")
+    for r in range(1, ws.max_row + 1):
+        if str(ws.cell(row=r, column=2).value or "") == "Check vs current book":
+            ws.cell(row=r, column=3).value = f"=SUM({L_rng})"
+    # RPF-adjusted block: header row has C='Prior', D='Current'
+    for r in range(1, ws.max_row + 1):
+        if not (str(ws.cell(row=r, column=3).value or "") == "Prior"
+                and str(ws.cell(row=r, column=4).value or "") == "Current"):
+            continue
+        geo_meo = leo = None
+        rr = r + 1
+        while rr <= ws.max_row:
+            lbl = str(ws.cell(row=rr, column=2).value or "")
+            if lbl.startswith("GEO"):
+                ws.cell(row=rr, column=4).value = (
+                    f'=SUMPRODUCT((ISNUMBER(SEARCH("GEO",{G_rng}))'
+                    f'+ISNUMBER(SEARCH("MEO",{G_rng})))*{L_rng}*{K_rng})')
+                geo_meo = rr
+            elif lbl == "LEO":
+                ws.cell(row=rr, column=4).value = (
+                    f'=SUMPRODUCT(ISNUMBER(SEARCH("LEO",{G_rng}))*{L_rng}*{K_rng})')
+                leo = rr
+            elif lbl == "Total":
+                if geo_meo and leo:
+                    ws.cell(row=rr, column=4).value = f"=D{geo_meo}+D{leo}"
+                break
+            rr += 1
+        break
+
+    # ---- Layer-movement exposure split → live (link to Book Movement) --------
+    # New business / Renewed / in-progress / Lapsed all come from the same
+    # split_movement Book Movement uses, so link each to its at-a-glance cell.
+    # Guarded on Book Movement existing, so nothing can #REF.
+    def _ch_row(prefix):
+        for rr in range(1, ws.max_row + 1):
+            if str(ws.cell(row=rr, column=2).value or "").startswith(prefix):
+                return rr
+        return None
+
+    if "Book Movement" in wb.sheetnames:
+        bm = wb["Book Movement"]
+
+        def _bm_ref(needle):
+            for rr in range(1, bm.max_row + 1):
+                if needle in str(bm.cell(row=rr, column=2).value or ""):
+                    return f"'Book Movement'!C{rr}"
+            return None
+
+        for ch_label, bm_needle in (
+                ("New business exposure", "New business"),
+                ("Renewed (rewritten) exposure", "current exposure"),
+                ("Renewals in progress (unbound)", "Renewals in progress"),
+                ("Lapsed exposure (off the book)", "Lapsed (not renewed")):
+            cr, br = _ch_row(ch_label), _bm_ref(bm_needle)
+            if cr and br:
+                ws.cell(row=cr, column=3).value = f"={br}"
+
+
+# --------------------------------------------------------------------------- #
+#  Cover  →  Summary / Per Layer                                                #
+# --------------------------------------------------------------------------- #
+def linkify_cover(wb, sheet="Cover", summary="Summary", per_layer="Per Layer"):
+    """De-hardcode the Cover 'key facts': on-risk layers, total signed exposure
+    and the worst-case FIHL gross headline become live formulas so the cover
+    always agrees with the sheets behind it. Values sit in col C beside a col-B
+    label; located by label, so tolerant of layout shifts."""
+    if sheet not in wb.sheetnames:
+        return
+    ws = wb[sheet]
+    pl = f"'{per_layer}'"
+
+    def _val_row(label):
+        for r in range(1, ws.max_row + 1):
+            if str(ws.cell(row=r, column=2).value or "").strip() == label:
+                return r
+        return None
+
+    if per_layer in wb.sheetnames:
+        r = _val_row("On-risk layers")
+        if r:
+            ws.cell(row=r, column=3).value = f"=COUNTA({pl}!C2:C100000)"
+            ws.cell(row=r, column=3).number_format = "#,##0"
+        r = _val_row("Total signed exposure")
+        if r:
+            ws.cell(row=r, column=3).value = (
+                f'="$"&TEXT(SUM({pl}!L:L)/1000000,"#,##0.0")&"m"')
+
+    if summary in wb.sheetnames:
+        bases = _summary_bases(wb[summary])
+        fihl = bases.get("FIHL")
+        r = _val_row("Worst-case (FIHL gross)")
+        if r and fihl is not None:
+            sr = fihl + SCEN_ORDER.index("Space Weather")
+            ws.cell(row=r, column=3).value = (
+                f'="$"&TEXT(Summary!D{sr}/1000000,"#,##0.0")&"m  ·  Space Weather"')
+
+
+# --------------------------------------------------------------------------- #
+#  Change Narrative  →  Summary (current side) ; prior stays a value            #
+# --------------------------------------------------------------------------- #
+def linkify_change_narrative(wb, sheet="Change Narrative", summary="Summary"):
+    """De-hardcode the Change Narrative's current columns by linking them to the
+    canonical Summary cascade (Cur Gross → Summary!D combined/receiver basis,
+    Cur Net → Summary!J). Δ / Δ% are already live formulas off these cells.
+    Prior stays a value — it's the frozen prior quarter, with no tab to point
+    at (same as every other 'Prior' column in the book)."""
+    if sheet not in wb.sheetnames or summary not in wb.sheetnames:
+        return
+    ws = wb[sheet]
+    bases = _summary_bases(wb[summary])
+    if "FIHL" not in bases:
+        return
+
+    def srow(ent, scen):
+        b = bases.get(ent)
+        return None if (b is None or scen not in SCEN_ORDER) else b + SCEN_ORDER.index(scen)
+
+    cur_scen = None
+    for r in range(1, ws.max_row + 1):
+        b = str(ws.cell(row=r, column=2).value or "").strip()
+        if b in SCEN_ORDER:
+            cur_scen = b
+            continue
+        if b in ("FIHL", "FUL", "FIBL", "FIID") and cur_scen:
+            sr = srow(b, cur_scen)
+            if sr:
+                ws.cell(row=r, column=4).value = f"=Summary!D{sr}"   # Cur Gross
+                ws.cell(row=r, column=5).value = f"=Summary!J{sr}"   # Cur Net
+
+
+# --------------------------------------------------------------------------- #
+#  Summary  →  Per Layer (operating-entity additive-scenario gross only)        #
+# --------------------------------------------------------------------------- #
+def linkify_summary(wb, sheet="Summary", per_layer="Per Layer"):
+    """Formula-drive the additive scenario grosses — Proton Flare / Generic
+    Defect / Space Debris — for the operating entities FUL & FIID: each becomes
+    a SUMIFS on the Per Layer scenario-loss column (itself per_sc × rate × RPF,
+    linked to Parameters). Deliberately NOT touched, because they are not plain
+    sums of a Per Layer column: FIHL (combined — the scenario loss also lands on
+    the S3123/equity add-on exposure), FIBL (internal receiver), Space Weather
+    (worst single manufacturer) and Max Risk (largest single spacecraft). Those
+    stay the engine's reconciled values."""
+    if sheet not in wb.sheetnames or per_layer not in wb.sheetnames:
+        return
+    ws = wb[sheet]
+    pl = wb[per_layer]
+    H = _header_cols(pl, 1)
+    if not {"entity", "pf_fihl", "gd_fihl", "sd_fihl"} <= set(H):
+        return
+    PL = f"'{per_layer}'"
+    ent_c = _col_letter(H["entity"])
+    scen_col = {"Proton Flare": _col_letter(H["pf_fihl"]),
+                "Generic Defect": _col_letter(H["gd_fihl"]),
+                "Space Debris": _col_letter(H["sd_fihl"])}
+    bases = _summary_bases(ws)
+    linked = False
+    for ent in ("FUL", "FIID"):
+        base = bases.get(ent)
+        if base is None:
+            continue
+        for scen, sc in scen_col.items():
+            r = base + SCEN_ORDER.index(scen)
+            ws.cell(row=r, column=4).value = (
+                f'=SUMIFS({PL}!{sc}:{sc},{PL}!{ent_c}:{ent_c},"{ent}")')
+            linked = True
+    if linked:
+        from openpyxl.styles import Font
+        nr = ws.max_row + 2
+        c = ws.cell(row=nr, column=2, value=(
+            "Gross: FUL & FIID Proton Flare / Generic Defect / Space Debris are "
+            "live SUMIFS on Per Layer (per_sc x rate x RPF). FIHL (combined), FIBL "
+            "(receiver), Space Weather (worst manufacturer) and Max Risk (largest "
+            "spacecraft) are the reconciled engine values — not plain per-layer sums."))
+        c.font = Font(name="Calibri", size=8, italic=True, color="6B7785")
+
 
 def linkify(wb):
     linkify_per_layer(wb)
@@ -509,3 +797,6 @@ def linkify(wb):
     linkify_exec_summary(wb)
     linkify_portfolio(wb)
     linkify_changes(wb)
+    linkify_cover(wb)
+    linkify_change_narrative(wb)
+    linkify_summary(wb)

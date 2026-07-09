@@ -152,6 +152,9 @@ def main():
         try:
             from src import prior_seed
             prior_layers = prior_seed.load_prior_workbook(prior_path)
+            # Restore prior S3123/equity add-ons when the auto book cached them
+            # as formulas — keeps FIHL combined on the same basis as current.
+            prior_layers = prior_seed.restore_addons(prior_layers, per_layer, p)
             prior_grid = net_mod.summary_grid(prior_layers, p)
             label = (p.raw or {}).get("prior_as_at_label") or "prior close"
             changes = prior_seed.build_changes(per_layer, grid,

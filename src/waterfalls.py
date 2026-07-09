@@ -89,9 +89,13 @@ def _locate(wb, n_layers):
 
     if "Portfolio" in wb.sheetnames:
         p = wb["Portfolio"]
+        # Renewal-aware Portfolio bridge: Opening / +New / ↻Renewals / −Lapsed /
+        # ±Revaluation / Closing (labels are lower-case 'run-off', so match on
+        # 'Lapsed'; add the Renewals step so the waterfall ties).
         ref["p_open"] = _find_row(p, "Opening", contains=True)
         ref["p_new"] = _find_row(p, "New business", contains=True)
-        ref["p_run"] = _find_row(p, "Run-off", contains=True)
+        ref["p_ren"] = _find_row(p, "Renewals", contains=True)
+        ref["p_run"] = _find_row(p, "Lapsed", contains=True)
         ref["p_reval"] = _find_row(p, "Revaluation", contains=True)
         ref["p_close"] = _find_row(p, "Closing", contains=True)
 
@@ -224,8 +228,11 @@ def _waterfall_block(ws, r0, c0, heading, steps, reported_close=None,
 # --------------------------------------------------------------------------- #
 #  Composition panel: ranked table (live SUMIFS) + horizontal bar              #
 # --------------------------------------------------------------------------- #
-def _comp_panel(ws, r0, c0, title, items, total_ref):
-    """items: list of (member, exposure_formula, sort_value). Ranked desc."""
+def _comp_panel(ws, r0, c0, title, items, total_ref, chart=False):
+    """items: list of (member, exposure_formula, sort_value). Ranked desc.
+    A ranked table with a Share column reads clearly on its own, so the bar
+    chart is OFF by default (it just duplicated the table) — pass chart=True to
+    restore it for a panel that genuinely benefits from the visual."""
     items = [(k, f, float(v)) for k, f, v in items if v]
     items.sort(key=lambda x: x[2], reverse=True)
     ws.cell(row=r0, column=c0, value=title).font = F_SECT
@@ -245,6 +252,14 @@ def _comp_panel(ws, r0, c0, title, items, total_ref):
         exp = f"{_L(c0 + 1)}{first + i}"
         _fcell(ws, first + i, c0 + 2, f"=IFERROR({exp}/({total_ref}),0)", alt=alt, fmt=PCT)
     last = first + len(items) - 1
+    # in-cell data bars on the Share column give the visual ranking without a
+    # separate chart taking half the page.
+    from openpyxl.formatting.rule import DataBarRule
+    ws.conditional_formatting.add(
+        f"{_L(c0 + 2)}{first}:{_L(c0 + 2)}{last}",
+        DataBarRule(start_type="num", start_value=0, end_type="max", color="8FB0CF"))
+    if not chart:
+        return r0 + len(items) + 3
     ch = BarChart(); ch.type = "bar"; ch.height = max(4.2, 0.6 * len(items) + 1.2)
     ch.width = 11; ch.legend = None
     ch.x_axis.delete = False; ch.y_axis.delete = False; ch.y_axis.numFmt = MONEY_M
@@ -330,13 +345,16 @@ def _clustered(ws, r0, c0, title, cats, series_specs, chart_h=7.0, chart_w=15.0)
 # --------------------------------------------------------------------------- #
 def _exposure_steps_linked(ref):
     pf = "Portfolio"
-    return [
-        ("Opening in-force", "prior", f"={pf}!D{ref['p_open']}", "total"),
-        ("+ New business", "written", f"={pf}!D{ref['p_new']}", "auto"),
-        ("− Run-off / expiry", "expired", f"={pf}!D{ref['p_run']}", "auto"),
+    steps = [("Opening in-force", "prior", f"={pf}!D{ref['p_open']}", "total"),
+             ("+ New business", "written", f"={pf}!D{ref['p_new']}", "auto")]
+    if ref.get("p_ren"):
+        steps.append(("↻ Renewals", "renewed", f"={pf}!D{ref['p_ren']}", "auto"))
+    steps += [
+        ("− Lapsed / run-off", "expired", f"={pf}!D{ref['p_run']}", "auto"),
         ("± Revaluation", "continuing", f"={pf}!D{ref['p_reval']}", "auto"),
         ("Closing in-force", "current", None, "total"),
     ]
+    return steps
 
 
 def _sumifs(crit_col, member, first, last):
@@ -362,14 +380,24 @@ def _wf_exposure(wb, per_layer, changes, params, ref, prior_layers=None):
     r = _waterfall_block(ws, 5, 2, "Portfolio exposure bridge ($m on-risk)",
                          _exposure_steps_linked(ref),
                          reported_close=f"=Portfolio!D{ref['p_close']}")
-    s = (changes or {}).get("layers", {}).get("summary", {})
-    if s:
-        net = float(s["new_exposure"]) - float(s["dropped_exposure"]) + float(s["net_move"])
+    L = (changes or {}).get("layers", {})
+    if L:
+        from . import renewals as _rnw
+        sp = _rnw.split_movement(L.get("new"), L.get("dropped"))
+
+        def _x(d):
+            return float(pd.to_numeric(d.get("per_sc"), errors="coerce").fillna(0).sum()) \
+                if d is not None and len(d) else 0.0
+        new_x, lap_x = _x(sp["new_biz"]), _x(sp["lapsed"])
+        renewed = _x(sp["ren_new"]) - _x(sp["ren_old"])
+        mv = float(L.get("summary", {}).get("net_move", 0.0))
+        net = new_x + renewed - lap_x + mv
         ws.cell(row=r, column=2, value=(
-            f"Read: the book {'grew' if net >= 0 else 'shrank'} {net / 1e6:,.1f}m — "
-            f"{float(s['new_exposure']) / 1e6:,.1f}m new vs "
-            f"{float(s['dropped_exposure']) / 1e6:,.1f}m run-off. Every step links to "
-            "the Portfolio bridge; green = added, red = removed, navy = level.")).font = F_SUB
+            f"Read: the book {'grew' if net >= 0 else 'shrank'} {abs(net) / 1e6:,.1f}m — "
+            f"{new_x / 1e6:,.1f}m genuine new vs {lap_x / 1e6:,.1f}m genuine run-off; "
+            "roll-forward renewals net out (not counted as run-off). Every step "
+            "links to the Portfolio bridge; green = added, red = removed, navy = level."
+            )).font = F_SUB
     r += 3
 
     first, last = ref["pl_first"], ref["pl_last"]
@@ -415,7 +443,10 @@ def _wf_exposure(wb, per_layer, changes, params, ref, prior_layers=None):
 
 
 def _slice_bridges(ws, r, per_layer, prior_layers,
-                   dims=("entity", "orbit", "bus_manufacturer")):
+                   dims=("entity", "orbit")):
+    # Manufacturer slice-bridges dropped (user 2026Q2): too many thin per-maker
+    # waterfalls; manufacturer concentration is still on the 'By bus manufacturer'
+    # composition panel above. Entity / orbit bridges are retained.
     cur = per_layer.copy(); prior = prior_layers.copy()
     if "layer_key" in cur:
         cur["layer_key"] = cur["layer_key"].astype(str)
@@ -460,9 +491,9 @@ def _binding_scenario(scen_df, entity=GROUP):
 
 def _wf_loss(wb, summary, changes, params, ref):
     ws = wb.create_sheet("WF · Loss Movement")
-    _title(ws, "Space RDS — Net Loss Movement",
-           "Scenario net loss, current vs prior run  ·  per entity  ·  "
-           "worst-case deep-dive  ·  live-linked to Changes")
+    _title(ws, "Space RDS — Loss Movement",
+           "QoQ change in scenario loss, gross & net  ·  worst-case deep-dive  ·  "
+           "per-entity detail below  ·  live-linked to Changes")
     ws.column_dimensions["A"].width = 2
 
     scen = None if not changes else changes.get("scenarios")
@@ -475,25 +506,29 @@ def _wf_loss(wb, summary, changes, params, ref):
     scen = scen.copy()
     bind = _binding_scenario(scen, GROUP)
 
-    cur = [_scen_ref(ref, "net_base", GROUP, s, "cur") for s in SCEN_ORDER]
-    prior = [_scen_ref(ref, "net_base", GROUP, s, "prior") for s in SCEN_ORDER]
     cats_flag = [f"{s}  \u25c6" if s == bind else s for s in SCEN_ORDER]
-    r = _section(ws, 5, f"All scenarios — {GROUP} net loss, current vs prior")
-    r = _clustered(ws, r, 2, "", cats_flag,
-                   [("Prior", [f"={x}" for x in prior], NAVY_LT),
-                    ("Current", [f"={x}" for x in cur], NAVY)])
-    ws.cell(row=r, column=2, value=(
-        f"\u25c6 worst-case scenario this quarter ({bind}). Scenarios are single-event "
-        "RDS views and are never summed; the worst one sets capital.")).font = F_SUB
-    r += 2
+    has_gross = ref.get("gross_base", {}).get(GROUP) is not None
 
-    drefs = [f"={_scen_ref(ref, 'net_base', GROUP, s, 'delta')}" for s in SCEN_ORDER]
-    signs = []
-    for s in SCEN_ORDER:
-        row = scen[(scen["entity"] == GROUP) & (scen["scenario"] == s)]
-        signs.append(_num(row["d_net"].iloc[0]) if len(row) else None)
-    r = _delta_bars(ws, r, 2, f"All scenarios — {GROUP} \u0394 net vs prior",
-                    SCEN_ORDER, drefs, signs)
+    # ONE movement chart — \u0394 gross AND net by scenario. The tab's whole point
+    # is the QoQ change; the levels (prior/current) live in the entity table
+    # below, so we don't repeat them as extra level charts.
+    ndel = [f"={_scen_ref(ref, 'net_base', GROUP, s, 'delta')}" for s in SCEN_ORDER]
+    r = _section(ws, 5, f"{GROUP} loss movement by scenario \u2014 \u0394 vs prior")
+    if has_gross:
+        gdel = [f"={_scen_ref(ref, 'gross_base', GROUP, s, 'delta')}" for s in SCEN_ORDER]
+        r = _clustered(ws, r, 2, "", cats_flag,
+                       [("\u0394 Gross", gdel, NAVY_LT), ("\u0394 Net", ndel, NAVY)])
+    else:
+        signs = []
+        for s in SCEN_ORDER:
+            row = scen[(scen["entity"] == GROUP) & (scen["scenario"] == s)]
+            signs.append(_num(row["d_net"].iloc[0]) if len(row) else None)
+        r = _delta_bars(ws, r, 2, "", SCEN_ORDER, ndel, signs)
+    ws.cell(row=r, column=2, value=(
+        f"\u25c6 worst-case scenario ({bind}). Positive = loss grew vs prior, "
+        "negative = shrank. Scenarios are single-event views, never summed \u2014 "
+        "the worst one sets capital.")).font = F_SUB
+    r += 2
 
     if bind:
         nb = ref["net_base"][GROUP] + SCEN_ORDER.index(bind)
@@ -525,22 +560,36 @@ def _wf_loss(wb, summary, changes, params, ref):
                 "reinsurance structure rather than reaching the net account.")).font = F_SUB
             r += 3
 
-    r = _section(ws, r, "QoQ net loss by entity \u00d7 scenario ($)  (links to Changes)")
-    r = _hdr(ws, r, 2, ["Entity", "Scenario", "Current Net", "Prior Net",
-                        "\u0394 Net", "\u0394 %"], [10, 18, 15, 15, 15, 9])
+    r = _section(ws, r, "QoQ loss by entity \u00d7 scenario ($) \u2014 gross AND net  "
+                        "(links to Changes)")
+    r = _hdr(ws, r, 2, ["Entity", "Scenario", "Cur Gross", "Prior Gross",
+                        "\u0394 Gross", "Cur Net", "Prior Net", "\u0394 Net",
+                        "\u0394 % Net"],
+             [10, 18, 14, 14, 14, 14, 14, 14, 9])
     k = 0
     for ent in ENT_ORDER:
         base = ref["net_base"].get(ent)
+        gbase = ref.get("gross_base", {}).get(ent)
         if base is None:
             continue
         for j, scn in enumerate(SCEN_ORDER):
             rr = base + j; alt = k % 2 == 0
             _cell(ws, r, 2, ent, alt=alt, bold=(j == 0))
             _cell(ws, r, 3, scn, alt=alt)
-            _fcell(ws, r, 4, f"=Changes!D{rr}", alt=alt, fmt=MONEY)
-            _fcell(ws, r, 5, f"=Changes!E{rr}", alt=alt, fmt=MONEY)
-            _fcell(ws, r, 6, f"=Changes!F{rr}", alt=alt, fmt=MONEY)
-            _fcell(ws, r, 7, f"=IFERROR(Changes!F{rr}/Changes!E{rr},0)", alt=alt, fmt=PCT)
+            # Gross (links to the Changes 'By scenario (gross)' block when present)
+            if gbase is not None:
+                gr = gbase + j
+                _fcell(ws, r, 4, f"=Changes!D{gr}", alt=alt, fmt=MONEY)
+                _fcell(ws, r, 5, f"=Changes!E{gr}", alt=alt, fmt=MONEY)
+                _fcell(ws, r, 6, f"=Changes!F{gr}", alt=alt, fmt=MONEY)
+            else:
+                for cc in (4, 5, 6):
+                    _cell(ws, r, cc, None, alt=alt)
+            # Net
+            _fcell(ws, r, 7, f"=Changes!D{rr}", alt=alt, fmt=MONEY)
+            _fcell(ws, r, 8, f"=Changes!E{rr}", alt=alt, fmt=MONEY)
+            _fcell(ws, r, 9, f"=Changes!F{rr}", alt=alt, fmt=MONEY)
+            _fcell(ws, r, 10, f"=IFERROR(Changes!F{rr}/Changes!E{rr},0)", alt=alt, fmt=PCT)
             r += 1; k += 1
 
 
