@@ -25,6 +25,7 @@ from openpyxl.chart.shapes import GraphicalProperties
 from openpyxl.drawing.fill import PatternFillProperties, ColorChoice
 from openpyxl.drawing.colors import ColorChoice as DrawColorChoice
 from openpyxl.worksheet.properties import PageSetupProperties
+from openpyxl.comments import Comment
 
 INK = "1F2933"; ACCENT = "1B3A5C"; CREAM = "EEF3F8"; RULE = "DCE3EA"
 SOFT = "6B7785"; GREEN = "2D6A3C"; AMBER = "9A6410"; TEAL = "1B3A5C"
@@ -333,6 +334,15 @@ def _col(colmap, field):
     return f"'{_PL_SHEET}'!{colmap[field]}:{colmap[field]}"
 
 
+def _note(cell, text):
+    """Attach a reconciliation hover-note to a cell (engine value / build-up)."""
+    if cell is None:
+        return
+    c = Comment(text, "Reconcile")
+    c.width, c.height = 320, 150
+    cell.comment = c
+
+
 
 def _control(wb, per_layer, params, source, recon, colmap):
     ws = wb.create_sheet("Control")
@@ -453,16 +463,43 @@ def _summary(ws, grid, params, source, per_layer, addon_refs=None):
             # Gross: FIHL shows COMBINED (ex-add-on gross + S3123 QS + equity);
             # the ex-add-on figure sits in the memo columns. FUL/FIID unchanged.
             gross_disp = (float(val("gross") or 0) + addons) if is_fihl else val("gross")
-            _cell(ws, r, 4, gross_disp, alt=alt, money=True)
-            _cell(ws, r, 5, val("ext_qs"), alt=alt, money=True)
+            cD = _cell(ws, r, 4, gross_disp, alt=alt, money=True)
+            if not is_fihl:  # FIHL D is overwritten with =SUM(L:N) below + noted there
+                _note(cD, "Gross = worst-case scenario aggregate over the Per Layer "
+                          "tab: sum of eligible per-layer exposure (per_sc) x the "
+                          "scenario factor. Reconcile on Per Layer / Netting "
+                          "Waterfalls.")
+            cE = _cell(ws, r, 5, val("ext_qs"), alt=alt, money=True)
+            _note(cE, "External QS (outwards RI) = SUM per layer of (exposure x "
+                      "outwards-slot pct, by inception date). This quarter every "
+                      "on-risk layer sits in the 20% slot (Parameters -> External "
+                      "Quota Share), so it equals 20% of the ex-add-on gross - but "
+                      "it is a per-layer aggregation, NOT a flat rate: a bird in a "
+                      "different slot changes it. Authoritative figure is the engine "
+                      "value here; reconcile on Per Layer (ext_qs column).")
             # Net of Ext QS = Gross - Ext QS  (live)
             f6 = f"=D{r}-E{r}" if val("net_of_ext_qs") is not None else None
             _cell(ws, r, 6, f6, alt=alt, money=True)
-            _cell(ws, r, 7, val("igr_qs_ceded"), alt=alt, money=True)
+            cG = _cell(ws, r, 7, val("igr_qs_ceded"), alt=alt, money=True)
+            if is_fihl:
+                _note(cG, "0 at the FIHL group view: the intra-group QS is ceded by "
+                          "FUL & FIID and RECEIVED by FIBL, so it nets out at group "
+                          "level. See the FUL / FIID rows and the FIBL receiver block.")
+            else:
+                _igr = (((getattr(params, 'raw', {}) or {}).get('igr_qs', {})
+                         .get('default', {}) or {}).get(entity))
+                _rtxt = f" (rate {_igr:.0%})" if isinstance(_igr, (int, float)) else ""
+                _note(cG, f"IGR quota share ceded to FIBL = SUM per layer of "
+                          f"(net-of-ext x IGR {entity} QS rate){_rtxt}. Rate on "
+                          f"Parameters -> IGR {entity} QS. Drill: Per Layer "
+                          f"(igr_qs_ceded) / Netting Waterfalls.")
             # Net of QS = Net of Ext QS - IGR QS Ceded  (live)
             f8 = f"=F{r}-G{r}" if val("net_of_qs") is not None else None
             _cell(ws, r, 8, f8, alt=alt, money=True)
-            _cell(ws, r, 9, val("xol_ceded"), alt=alt, money=True)
+            cI = _cell(ws, r, 9, val("xol_ceded"), alt=alt, money=True)
+            _note(cI, f"IGR XoL recovery - 0 unless this scenario's net-of-QS "
+                      f"pierces the {entity} attachment. Terms (excess / limit) on "
+                      f"Parameters -> IGR {entity} XoL. Drill: Netting Waterfalls.")
             # Net: FIHL net = (net of QS − XoL) already carries add-ons because
             # for FIHL the cascade's IGR QS/XoL are zero and Gross is combined,
             # so H−I = combined net. FUL/FIID: standard H−I.
@@ -500,7 +537,13 @@ def _summary(ws, grid, params, source, per_layer, addon_refs=None):
                 # combined build-up is transparent, not a baked number.
                 if memo_present:
                     last = get_column_letter(11 + len(memo_present))
-                    _cell(ws, r, 4, f"=SUM(L{r}:{last}{r})", alt=alt, money=True)
+                    cDf = _cell(ws, r, 4, f"=SUM(L{r}:{last}{r})", alt=alt, money=True)
+                    _note(cDf, "FIHL headline = COMBINED Exec basis = ex-add-on "
+                               "gross (L) + S3123 QS to IG (M) + IG Equity (N), the "
+                               "memo cells to the right. Those three live once on "
+                               "the 'S3123 & Equity (IG)' tab (L:N reference it). "
+                               "The ex-add-on gross reconciles as the worst-case "
+                               "aggregate over Per Layer.")
             # capture this row's cell refs for downstream live-formula sheets
             rowmap[(entity, val("scenario"))] = {
                 "gross": f"D{r}", "ext_qs": f"E{r}", "igr_qs": f"G{r}",
@@ -1021,6 +1064,22 @@ def _parameters(wb, params):
          "Warns if the latest param_consortium_splits MGU row ends before the "
          "as-at (the gap that dropped Turksat 6A until its 2026-04-01→06-30 "
          "row was added)", bold_val=False)
+
+    psection("External Quota Share (outwards RI)")
+    try:
+        _act = [s for s in params.outwards_slots
+                if s["from"] <= params.as_at <= s["to"]]
+        _actpct = float(_act[0]["pct"]) if _act else None
+    except Exception:  # noqa: BLE001
+        _actpct = None
+    if _actpct is not None:
+        prow("External Quota Share (current)", _actpct,
+             "outwards RI cession active at as-at; the Summary 'Ext QS' column is "
+             "SUM per layer of (exposure x slot pct by inception) — 20% only while "
+             "every on-risk bird sits in this slot", pct=True)
+    for s in params.outwards_slots:
+        prow(f"  slot {s.get('name', s.get('id', ''))}", float(s["pct"]),
+             f"inception {s['from']} -> {s['to']}", pct=True, bold_val=False)
 
     psection("IGR Quota Share")
     for ent, rate in raw["igr_qs"]["default"].items():
