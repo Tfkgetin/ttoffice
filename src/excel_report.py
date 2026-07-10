@@ -322,7 +322,7 @@ _PL_KEEP = ["program_id", "layer_id", "entity", "mapping_code", "spacecraft_id",
             # engine's own per-layer S3123 basis — so linkify can compute s3123_qs
             # / equity EXACTLY (3-tier factor + full eligibility) instead of a
             # brittle 2-tier date reconstruction:
-            "s3123_eligible", "s3123_factor", "equity_pct",
+            "s3123_eligible", "s3123_factor", "s2126_factor", "equity_pct",
             "igr_qs_rate", "igr_qs_ceded", "net_of_qs", "xol_ceded",
             "net_of_xol", "pf_fihl", "gd_fihl", "sd_fihl", "total_fibl_ceded",
             # per-entity scenario contributions + per-$ cession rates: the
@@ -330,13 +330,21 @@ _PL_KEEP = ["program_id", "layer_id", "entity", "mapping_code", "spacecraft_id",
             # aggregates are live formulas, not baked numbers (additive scenarios).
             "pf_ful", "pf_fiid", "gd_ful", "gd_fiid", "sd_ful", "sd_fiid",
             "ext_qs_pp", "igr_ceded_pp", "s3123_qs_pp", "equity_pp",
-            # per-layer S3123 / S2126 syndicate contributions (gross + net) per
-            # RDS — selection baked in; the Lloyd's Summary tabs SUM these so the
-            # syndicate Gross/Net are live formulas, not baked numbers.
-            "s3123_pf_g", "s3123_pf_n", "s3123_sw_g", "s3123_sw_n",
-            "s3123_gd_g", "s3123_gd_n", "s3123_sd_g", "s3123_sd_n",
-            "s2126_pf_g", "s2126_pf_n", "s2126_sw_g", "s2126_sw_n",
-            "s2126_gd_g", "s2126_gd_n", "s2126_sd_g", "s2126_sd_n"]
+            # per-layer S3123 / S2126 syndicate contributions per RDS. The _g
+            # (gross) and _n (net) cells are LIVE formulas built from per_sc x
+            # factor x _elig x loss x rpf and the QS cession; _elig (share gate)
+            # and _sel (in-scenario membership) are the only engine-set inputs.
+            # The Lloyd's Summary tabs SUM the _g/_n columns.
+            "s3123_rds_elig",
+            "s3123_pf_sel", "s3123_pf_g", "s3123_pf_n",
+            "s3123_sw_sel", "s3123_sw_g", "s3123_sw_n",
+            "s3123_gd_sel", "s3123_gd_g", "s3123_gd_n",
+            "s3123_sd_sel", "s3123_sd_g", "s3123_sd_n",
+            "s2126_rds_elig",
+            "s2126_pf_sel", "s2126_pf_g", "s2126_pf_n",
+            "s2126_sw_sel", "s2126_sw_g", "s2126_sw_n",
+            "s2126_gd_sel", "s2126_gd_g", "s2126_gd_n",
+            "s2126_sd_sel", "s2126_sd_g", "s2126_sd_n"]
 
 # additive scenarios only — selections (Space Weather / Max Risk) are not sums
 _SP_SCEN = {"Proton Flare": "pf", "Generic Defect": "gd", "Space Debris": "sd"}
@@ -1761,10 +1769,44 @@ def _change_narrative(wb, changes, per_layer, mr, sw, params):
         ws.column_dimensions[col].width = w
 
 
-def _per_layer(wb, per_layer):
+def _contrib_formula(spec, i, idx):
+    """Live formula string for an S3123/S2126 contribution cell at row i, or
+    None if a referenced Per Layer column is missing (caller falls back to the
+    engine value). `idx` maps column name -> 0-based position on the sheet."""
+    def _c(name):
+        return get_column_letter(idx[name] + 1) if name in idx else None
+    if spec["kind"] == "gross":
+        persc, fac = _c("per_sc"), _c(spec["factor"])
+        elig, sel = _c(spec["elig"]), _c(spec["sel"])
+        if not all((persc, fac, elig, sel)):
+            return None
+        term = f"{persc}{i}*{fac}{i}*{elig}{i}*{spec['loss']:g}"
+        if spec["rpf"]:
+            rpf = _c("rpf")
+            if not rpf:
+                return None
+            term += f"*{rpf}{i}"
+        return f"=IF({sel}{i}=1,{term},0)"
+    # net = gross x (1 - qs); excluded spacecraft retain 100% (net = gross)
+    g = _c(spec["gross"])
+    if not g:
+        return None
+    if spec["qs"] == 0:
+        return f"={g}{i}"
+    excl = sorted(spec["excl"])
+    if excl:
+        scid = _c("spacecraft_id")
+        if scid:
+            cond = "OR(" + ",".join(f"{scid}{i}={x}" for x in excl) + ")"
+            return f"=IF({cond},{g}{i},{g}{i}*{1 - spec['qs']:g})"
+    return f"={g}{i}*{1 - spec['qs']:g}"
+
+
+def _per_layer(wb, per_layer, contrib=None):
     ws = wb.create_sheet("Per Layer")
     ws.sheet_view.showGridLines = False
     keep = [c for c in _PL_KEEP if c in per_layer.columns]
+    contrib = contrib or {}
     money_cols = {"per_sc", "ext_qs", "s3123_qs", "igr_qs_ceded", "net_of_qs",
                   "xol_ceded", "net_of_xol", "pf_fihl", "gd_fihl", "sd_fihl"}
     # per-$ cession-rate helper columns are written as LIVE formulas (= $ column /
@@ -1787,6 +1829,12 @@ def _per_layer(wb, per_layer):
                             value=f"=IFERROR({num}{i}/{_per_col}{i},0)")
                 c.font = F_CELL
                 continue
+            if name in contrib:
+                f = _contrib_formula(contrib[name], i, _idx)
+                if f is not None:
+                    c = ws.cell(row=i, column=1 + j, value=f)
+                    c.font = F_CELL; c.number_format = MONEY
+                    continue
             v = row[name]
             if name == "s3123_eligible":
                 # write a real Excel boolean (not "True"/"False" text) so the
@@ -3634,6 +3682,35 @@ def write_results(path, per_layer, sw, mr, grid, params, source,
                            ("s3123_qs", "s3123_qs_pp"), ("equity_usd", "equity_pp")):
             if _src in per_layer.columns:
                 per_layer[_dst] = (per_layer[_src] / _ps).fillna(0.0)
+    # Live-formula spec for the S3123/S2126 contribution columns so their Per
+    # Layer cells are transparent formulas, not baked numbers: gross = per_sc x
+    # factor x elig x loss x rpf (gated by the selection flag); net = gross x
+    # cession (excluded s/c retain 100%). Loss/RPF/QS all read from config.
+    _contrib = {}
+    for _pfx, _cfgk, _faccol in (("s3123", "s3123_rds", "s3123_factor"),
+                                 ("s2126", "s2126_rds", "s2126_factor")):
+        _c = params.raw.get(_cfgk) or {}
+        if not _c:
+            continue
+        _scn = _c.get("scenarios", {}) or {}
+        _qs = float(_c.get("qs_to_ig", 0.20))
+        _excl = set(_c.get("qs_to_ig_excluded", []) or [])
+        _lm = {
+            "pf": (float((_scn.get("proton_flare") or {}).get("loss", 0.05)), False),
+            "sw": (float((_scn.get("space_weather") or {}).get("loss", 1.0)), False),
+            "gd": (float((_scn.get("generic_defect") or {}).get("loss", 0.5)),
+                   bool((_scn.get("generic_defect") or {}).get("apply_rpf", True))),
+            "sd": (float((_scn.get("space_debris") or {}).get("loss", 1.0)),
+                   bool((_scn.get("space_debris") or {}).get("apply_rpf", True))),
+        }
+        for _slug, (_loss, _rpf) in _lm.items():
+            _g, _n = f"{_pfx}_{_slug}_g", f"{_pfx}_{_slug}_n"
+            if _g in per_layer.columns:
+                _contrib[_g] = {"kind": "gross", "factor": _faccol,
+                                "elig": f"{_pfx}_rds_elig", "sel": f"{_pfx}_{_slug}_sel",
+                                "loss": _loss, "rpf": _rpf}
+            if _n in per_layer.columns:
+                _contrib[_n] = {"kind": "net", "gross": _g, "qs": _qs, "excl": _excl}
     colmap, _ = _pl_map(per_layer)
     _cover(wb, params, per_layer, grid)
     _exec_summary(wb, grid, per_layer, params, source, recon, excluded, changes)
@@ -3681,7 +3758,7 @@ def write_results(path, per_layer, sw, mr, grid, params, source,
         print(f"      WARNING: charts sheet skipped ({_e}) — the Changes tab "
               f"layout changed; charts_xlsx scans it and needs its anchors "
               f"updated. Deliverable tabs are unaffected.")
-    _per_layer(wb, per_layer)
+    _per_layer(wb, per_layer, contrib=_contrib)
     _rds_input_template(wb, grid, s3123_grid, params, summary_map)   # paste-ready regulator block
     if s3123_grid is not None and len(s3123_grid):
         from .s3123_sheet import write_s3123_sheet
