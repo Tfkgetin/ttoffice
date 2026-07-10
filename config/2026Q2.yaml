@@ -461,10 +461,15 @@ s3123_rds:
         outweighing the lower share. Net +$1.70m (+15%): net rises broadly in line
         with gross at ~0.82 retention.
       "Space Debris": >-
-        Gross −$7.45m (−36%): LEO run-off — WorldView / Maxar Legion re-attach to
-        the in-orbit fleet elsewhere and other LEO layers expire, shrinking the
-        worst orbit-range group (Group 1). Net −$5.96m (−36%): net moves in line
-        with gross at the full 20% QS (no excluded LEO birds).
+        Gross −$7.45m (−36%): LEO run-off in the worst orbit-range group (Group 1),
+        NOT a share-factor effect — the LEO fleet all incepted pre-2026-04-01, so
+        its consortium factor is unchanged (0.4167/0.500). Main driver: the OLD
+        WorldView Legion programme (341568) expired off-risk 2026-05-02 — in Q1 it
+        and its bound renewal (369418) were both on-risk (renewal overlap) and both
+        counted, by Q2 only the renewal remains, roughly halving Legion's Space-
+        Debris exposure. Pleiades Neo 3 & 4 also ran off; partly offset by new LEO
+        business (EarthDaily, HotSat). Net −$5.96m (−36%): moves in line with gross
+        at the full 20% QS (no excluded LEO birds).
     # JJ's filed 2026Q1 Lloyd's RDS — shown as the prior column on the tab.
     previous_quarter_label: "2026Q1 (JJ filed)"
     previous_quarter:
