@@ -59,16 +59,28 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
             _s3c.s3123_layer_contribs(per_layer, params, cfg_key="s2126_rds",
                                       factor_col="s2126_factor", prefix="s2126"))
 
-    def _pl_sum_refs(prefix):
-        """{scenario: {'g': =SUM(range), 'n': =SUM(range)}} over Per Layer."""
-        colmap, _ = excel_report._pl_map(per_layer)
-        n = len(per_layer)
+    def _pl_sum_refs(wbk, prefix):
+        """{scenario: {'g': =SUM(range), 'n': =SUM(range)}} over Per Layer.
+
+        Reads the ACTUAL written 'Per Layer' header rather than a DataFrame
+        snapshot — write_results injects the per-$ (_pp) helper columns into a
+        local copy, so a DataFrame-derived column map drifts left by those
+        columns and the SUMs would point at the wrong cells.
+        """
+        from openpyxl.utils import get_column_letter as _gcl
         refs = {}
+        if excel_report._PL_SHEET not in wbk.sheetnames:
+            return refs
+        wp = wbk[excel_report._PL_SHEET]
+        hdr = {wp.cell(1, c).value: _gcl(c)
+               for c in range(1, wp.max_column + 1) if wp.cell(1, c).value}
+        n = wp.max_row
         for scen, slug in _s3c.SCEN_SLUG.items():
-            gr = excel_report._pl_range(colmap, n, f"{prefix}_{slug}_g")
-            nr = excel_report._pl_range(colmap, n, f"{prefix}_{slug}_n")
-            refs[scen] = {"g": f"=SUM({gr})" if gr else None,
-                          "n": f"=SUM({nr})" if nr else None}
+            gc = hdr.get(f"{prefix}_{slug}_g")
+            nc = hdr.get(f"{prefix}_{slug}_n")
+            refs[scen] = {
+                "g": f"=SUM('{wp.title}'!${gc}$2:${gc}${n})" if gc else None,
+                "n": f"=SUM('{wp.title}'!${nc}$2:${nc}${n})" if nc else None}
         return refs
 
     chg = changes_mod.compute(per_layer, summary, prior, cur_s3=s3grid)
@@ -184,7 +196,7 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
             risk_appetite=appetite, prior=s3_prior,
             qoq_note=lcfg.get("qoq_note"), params=params,
             change_narrative=lcfg.get("change_narrative"),
-            pl_refs=_pl_sum_refs("s3123"))
+            pl_refs=_pl_sum_refs(_wbl, "s3123"))
         # The computed 'S3123 RDS' tab is superseded by the Lloyd's Summary —
         # keep it in the file (audit) but hide it from view.
         if "S3123 RDS" in _wbl.sheetnames:
@@ -229,7 +241,7 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
                 change_narrative=l2.get("change_narrative"),
                 sheet_name="S2126 RDS Summary", syndicate_no="2126",
                 cfg_key="s2126_rds", factors=params.s2126_factors,
-                pl_refs=_pl_sum_refs("s2126"))
+                pl_refs=_pl_sum_refs(_wb3, "s2126"))
             # raw computed 'S2126 RDS' tab superseded by the summary — hide it
             if "S2126 RDS" in _wb3.sheetnames:
                 _wb3["S2126 RDS"].sheet_state = "hidden"
