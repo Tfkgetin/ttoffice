@@ -23,6 +23,7 @@ INK = "1F2933"; NAVY = "1B3A5C"; GREEN = "2D6A3C"; RED = "C0392B"
 SOFT = "6B7785"; RULE = "DCE3EA"; WHITE = "FFFFFF"; AMBER = "9A6410"
 AMBERFILL = "FBF3E4"; REDFILL = "F7E4E1"
 F = "Calibri"
+MONEY_FMT = '"$"#,##0;"$"-#,##0'  # numeric cells render like _money() but stay live
 thin = Side(style="thin", color=RULE)
 
 
@@ -163,31 +164,69 @@ def write_lloyds_rds_summary(wb, grid, as_at="", sw_view=None,
                 name = f"{name}: {detail}"
             gross = float(row.get("gross") or 0)
             net = row.get("net")
+            try:
+                netf = float(net)
+            except (TypeError, ValueError):
+                netf = None
             unavail = (gross == 0 and not has_detail)
             ws.cell(r, 2, name).font = _f(10, True, INK)
             ws.cell(r, 2).alignment = Alignment(wrap_text=True, vertical="top")
             ws.cell(r, 3, desc).font = _f(9, False, SOFT)
             ws.cell(r, 3).alignment = Alignment(wrap_text=True, vertical="top")
-            gc = ws.cell(r, 4, "n/a" if unavail else _money(gross))
-            gc.font = _f(10, False, AMBER if unavail else INK)
-            gc.alignment = Alignment(horizontal="right")
-            nc = ws.cell(r, 5, "n/a" if unavail else _money(net))
-            nc.font = _f(10, False, AMBER if unavail else INK)
-            nc.alignment = Alignment(horizontal="right")
+
+            def _num(col, value, color=INK, fmt=MONEY_FMT):
+                """Write a live money cell — a number, a '=formula', or '-'.
+
+                'n/a' text and formulas both carry MONEY_FMT so a resolved
+                formula renders like the numeric cells around it.
+                """
+                cc = ws.cell(r, col)
+                if value is None:
+                    cc.value = "-"
+                elif value == "n/a":
+                    cc.value = "n/a"
+                else:
+                    cc.value = value
+                    cc.number_format = fmt
+                cc.font = _f(10, False, color)
+                cc.alignment = Alignment(horizontal="right")
+                return cc
+
+            # Gross (D) — engine value; selections keep their computed gross.
+            if unavail:
+                _num(4, "n/a", AMBER)
+            else:
+                _num(4, gross)
+            # Net (E) — for no-QS syndicates net == gross, written as a live
+            # formula (=D{r}); otherwise the engine's netted value.
+            if unavail:
+                _num(5, "n/a", AMBER)
+            elif _qs == 0:
+                _num(5, f"=D{r}")
+            else:
+                _num(5, netf)
+            # Prior gross / net (F, G) — dollar numbers, live for the deltas.
             pr = prior.get(scen) or {}
             pg = pr.get("gross"); pn = pr.get("net")
-            ws.cell(r, 6, _money(pg)).alignment = Alignment(horizontal="right")
-            ws.cell(r, 6).font = _f(10, False, SOFT)
-            ws.cell(r, 7, _money(pn)).alignment = Alignment(horizontal="right")
-            ws.cell(r, 7).font = _f(10, False, SOFT)
-            for c, cur, prv in ((8, gross, pg), (9, net, pn)):
-                try:
-                    d = None if unavail else float(cur) - float(prv)
-                except (TypeError, ValueError):
-                    d = None
-                dc = ws.cell(r, c, _money(d) if d is not None else "-")
-                dc.alignment = Alignment(horizontal="right")
-                dc.font = _f(10, False, GREEN if (d or 0) < 0 else RED if (d or 0) > 0 else SOFT)
+            try:
+                pgf = float(pg)
+            except (TypeError, ValueError):
+                pgf = None
+            try:
+                pnf = float(pn)
+            except (TypeError, ValueError):
+                pnf = None
+            _num(6, pgf, SOFT)
+            _num(7, pnf, SOFT)
+            # Δ Gross (H) = D-F, Δ Net (I) = E-G — live formulas when both sides
+            # are present; colour from the known Python delta.
+            dg = (gross - pgf) if (not unavail and pgf is not None) else None
+            dn = (netf - pnf) if (not unavail and netf is not None
+                                  and pnf is not None) else None
+            hc = _num(8, f"=D{r}-F{r}" if dg is not None else None)
+            hc.font = _f(10, False, GREEN if (dg or 0) < 0 else RED if (dg or 0) > 0 else SOFT)
+            ic = _num(9, f"=E{r}-G{r}" if dn is not None else None)
+            ic.font = _f(10, False, GREEN if (dn or 0) < 0 else RED if (dn or 0) > 0 else SOFT)
             for c in range(2, 10):
                 ws.cell(r, c).border = Border(bottom=thin)
             r += 1
