@@ -720,7 +720,7 @@ def _fibl_receiver_block(ws, r, grid, rowmap=None):
     return r + 2
 
 
-def _rds_input_template(wb, grid, s3grid, params, summary_map=None):
+def _rds_input_template(wb, grid, s3grid, params, summary_map=None, s2grid=None):
     """Regulator RDS Input Template block — one section per scenario, in the
     EXACT row order and entity-column order of JJ's RDS_Input_Template .xlsm
     'Scenario' tab, so the user can copy a scenario block and paste it straight
@@ -772,19 +772,25 @@ def _rds_input_template(wb, grid, s3grid, params, summary_map=None):
             return None
         return b.iloc[0].get(field)
 
-    def s3val(scen, field):
-        if s3grid is None:
+    def _synval(sg, scen, field):
+        if sg is None:
             return None
-        b = s3grid[s3grid["scenario"] == scen]
+        b = sg[sg["scenario"] == scen]
         return float(b.iloc[0][field]) if len(b) else None
+
+    def s3val(scen, field):
+        return _synval(s3grid, scen, field)
 
     def cell_value(label, rid, scen, ent):
         # returns (value, is_percent, is_blank)
-        if ent == "S2126":
-            return None, False, True   # not in the Space book
-        # S3123 column
-        if ent == "S3123":
-            g = s3val(scen, "gross"); n = s3val(scen, "net")
+        # Lloyd's syndicate columns — S3123 (QS to IG) and S2126 (no QS, net =
+        # gross). Same layout: Gross/Net/Net-inc-RIPS, Outwards QS Recovery =
+        # gross - net (S2126 -> 0), everything else 0; IGR & IG-equity rows grey.
+        if ent in ("S3123", "S2126"):
+            sg = s3grid if ent == "S3123" else s2grid
+            g = _synval(sg, scen, "gross"); n = _synval(sg, scen, "net")
+            if g is None and n is None:
+                return None, False, True   # grid absent -> leave blank
             if label == "Gross Loss": return g, False, False
             if label in ("Net Loss", "Net Loss inc RIPS"): return n, False, False
             if label == "Outwards QS Recovery":
@@ -3798,7 +3804,7 @@ def write_results(path, per_layer, sw, mr, grid, params, source,
                   recon=None, changes=None, excluded=None,
                   corrections=None, manual_includes=None,
                   s3123_grid=None, s3123_recon=None, s3123_notes=None,
-                  s3123_qoq=None):
+                  s3123_qoq=None, s2126_grid=None):
     # FIX(recon 2026Q1, O2): the S3123 sheet is now written HERE when a grid is
     # supplied, so the runner cannot forget to wire it (the shipped 2026Q1 book
     # carried $0 nets and a $0 Space Weather because the sheet was fed a stale /
@@ -3892,7 +3898,8 @@ def write_results(path, per_layer, sw, mr, grid, params, source,
               f"layout changed; charts_xlsx scans it and needs its anchors "
               f"updated. Deliverable tabs are unaffected.")
     _per_layer(wb, per_layer, contrib=_contrib)
-    _rds_input_template(wb, grid, s3123_grid, params, summary_map)   # paste-ready regulator block
+    _rds_input_template(wb, grid, s3123_grid, params, summary_map,
+                        s2grid=s2126_grid)   # paste-ready regulator block
     if s3123_grid is not None and len(s3123_grid):
         from .s3123_sheet import write_s3123_sheet
         write_s3123_sheet(wb, s3123_grid, recon=s3123_recon,
