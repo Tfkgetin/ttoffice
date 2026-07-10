@@ -97,7 +97,13 @@ def _ensure_s3123_factors(pw):
                     if str(pw.cell(row=r, column=2).value or "").startswith("Syndicate 3123")), 24)
     pw.cell(row=base, column=2, value="Syndicate 3123 consortium factors")
     _style((base, 2), (hdr_src, 2))
-    rows = [(base + 1, lab_ge, 0.5), (base + 2, lab_lt, "=5/12")]
+    # Full 3-tier schedule (documentation). The live per-layer s3123_factor column
+    # on Per Layer carries the exact value used (0.4167 / 0.500 / 0.333 by
+    # inception), and s3123_qs / equity reference THAT — so these rows document
+    # the schedule; the ≥/< 2026-01-01 pair is also returned for the legacy path.
+    rows = [(base + 1, lab_ge, 0.5),
+            (base + 2, lab_lt, "=5/12"),
+            (base + 3, "S3123 consortium factor — inception ≥ 2026-04-01", "=10/30")]
     for rr, lab, val in rows:
         pw.cell(row=rr, column=2, value=lab); _style((rr, 2), (25, 2))
         pw.cell(row=rr, column=3, value=val); _style((rr, 3), (25, 3))
@@ -215,14 +221,25 @@ def linkify_per_layer(wb, sheet="Per Layer", params="Parameters"):
         if asat_ref and band_rng:
             put("rpf", f"=IFERROR(LOOKUP(DATEDIF(DATEVALUE({asat_ref}),"
                        f'DATEVALUE({offr}{r}),"M"),{{0,6,12,18,999}},{band_rng}),0)')
-        # S3123 inwards QS — per_sc × cession × consortium factor, zero if excluded
-        if cession_ref and excl_ref and f_ge and f_lt:
+        # S3123 inwards QS — EXACT engine basis: per_sc × cession × the engine's own
+        # per-layer s3123_factor, gated by its own s3123_eligible flag (is_consortium
+        # AND not-excluded AND inside the date window). Referencing the per-layer
+        # factor/flag makes this exact vs the 3-tier schedule (0.4167 / 0.5 / 0.333);
+        # the old 2-tier date IF below overstated 2026-04-01+ inceptions and ignored
+        # the consortium / date-window gate.
+        if cession_ref and "s3123_eligible" in L and "s3123_factor" in L:
+            put("s3123_qs",
+                f"=IF({L['s3123_eligible']}{r},{per}{r}*{cession_ref}*{L['s3123_factor']}{r},0)")
+        elif cession_ref and excl_ref and f_ge and f_lt:      # legacy fallback
             excluded = (f'ISNUMBER(SEARCH(","&{scid}{r}&",",'
                         f'","&SUBSTITUTE({excl_ref}," ","")&","))')
             factor = f"IF(DATEVALUE({incp}{r})>=DATE(2026,1,1),{f_ge},{f_lt})"
             put("s3123_qs", f"=IF({excluded},0,{per}{r}*{cession_ref}*{factor})")
-        # IG equity share — per_sc × equity rate (by UW year) × consortium factor
-        if "equity_usd" in H and eq_year_rng and eq_rate_rng and f_ge and f_lt:
+        # IG equity share — EXACT engine basis: per_sc × equity_pct × s3123_factor.
+        # equity_pct already carries the is_consortium gate; s3123_factor is 3-tier.
+        if "equity_usd" in L and "equity_pct" in L and "s3123_factor" in L:
+            put("equity_usd", f"={per}{r}*{L['equity_pct']}{r}*{L['s3123_factor']}{r}")
+        elif "equity_usd" in H and eq_year_rng and eq_rate_rng and f_ge and f_lt:  # legacy
             yr = f"VALUE(LEFT({incp}{r},4))"
             erate = f"SUMIFS({eq_rate_rng},{eq_year_rng},{yr})"
             ef = f"IF(DATEVALUE({incp}{r})>=DATE(2026,1,1),{f_ge},{f_lt})"

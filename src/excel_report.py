@@ -319,6 +319,10 @@ _PL_SHEET = "Per Layer"
 _PL_KEEP = ["program_id", "layer_id", "entity", "mapping_code", "spacecraft_id",
             "spacecraft_name", "orbit", "bus_manufacturer", "inception",
             "off_risk_date", "rpf", "per_sc", "ext_qs", "s3123_qs", "equity_usd",
+            # engine's own per-layer S3123 basis — so linkify can compute s3123_qs
+            # / equity EXACTLY (3-tier factor + full eligibility) instead of a
+            # brittle 2-tier date reconstruction:
+            "s3123_eligible", "s3123_factor", "equity_pct",
             "igr_qs_rate", "igr_qs_ceded", "net_of_qs", "xol_ceded",
             "net_of_xol", "pf_fihl", "gd_fihl", "sd_fihl", "total_fibl_ceded",
             # per-entity scenario contributions + per-$ cession rates: the
@@ -1735,7 +1739,11 @@ def _per_layer(wb, per_layer):
                 c.font = F_CELL
                 continue
             v = row[name]
-            if isinstance(v, (dt.date, dt.datetime)):
+            if name == "s3123_eligible":
+                # write a real Excel boolean (not "True"/"False" text) so the
+                # linkify IF(s3123_eligible, ...) formula evaluates correctly
+                v = None if (isinstance(v, float) and pd.isna(v)) else bool(v)
+            elif isinstance(v, (dt.date, dt.datetime)):
                 v = str(v)
             elif isinstance(v, float) and pd.isna(v):
                 v = None
