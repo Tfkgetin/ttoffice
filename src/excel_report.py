@@ -1153,6 +1153,12 @@ def _parameters(wb, params):
     prow("S3123 excluded spacecraft",
          ", ".join(map(str, sorted(q["excluded"]))) or "\u2014",
          "spacecraft IDs excluded from S3123", bold_val=False)
+    # S3123 consortium time-factor schedule (XLOOKUP exact-or-next-smaller on
+    # inception). s3123_qs = per_sc x cession x this factor; equity uses it too.
+    for _frm, _fac in getattr(params, "s3123_factors", []):
+        prow(f"S3123 consortium factor \u2014 inception \u2265 {_frm}", float(_fac),
+             "inwards QS time-factor by inception (12.5/30, 15/30, 10/30)",
+             pct=True, bold_val=False)
 
     psection("Scenario loss factors")
     prow("Proton Flare insured loss", sc["proton_flare"]["insured_loss"],
@@ -1690,14 +1696,32 @@ def _change_narrative(wb, changes, per_layer, mr, sw, params):
         ws.merge_cells(start_row=r, start_column=3, end_row=r, end_column=12)
         ws.row_dimensions[r].height = 44
         r += 1
+    r += 1
+    # Cross-cutting driver: the S3123 consortium factor step moves the combined /
+    # receiver basis independent of gross exposure movement.
+    _cnote = ws.cell(row=r, column=2, value=(
+        "Combined-basis driver: FIHL headline gross/net and the FIBL receiver include "
+        "the S3123 QS to IG + IG equity add-backs. The S3123 consortium sub-share "
+        "stepped 0.500 → 0.333 for inceptions from 2026-04-01, so as the GEO fleet "
+        "renews post-April those add-backs fall ~1/3 on the renewed birds — a driver "
+        "of the combined and receiver movement that is INDEPENDENT of the gross "
+        "exposure change. External QS (20%) and the IGR QS rates are unchanged, so "
+        "operating-entity (FUL/FIID) net tracks gross."))
+    _cnote.font = Font(name=_FB, size=9, italic=True, color=SOFT)
+    _cnote.alignment = Alignment(wrap_text=True, vertical="top")
+    ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=12)
+    ws.row_dimensions[r].height = 56
     r += 2
 
     # Standing commentary the writer edits (seeded from the treaty terms) -------
     r = _section(ws, r, "Reinsurance arrangements (standing — edit as needed)")
     ri = ("External 20% QS on FUL/FIID/FIHL (risk-attaching). Internal QS FUL→FIBL "
           "40% (2022) / 50% (2023–25); FIID→FIBL 85% all years. Internal XoL "
-          "FUL→FIBL $245m xs $50m; FIID→FIBL $72.5m xs $7.5m. Internal 20% QS "
-          "S3123→FIBL (in force since 01/07/2024).")
+          "FUL→FIBL $245m xs $50m; FIID→FIBL $72.5m xs $7.5m. Inwards 20% QS "
+          "S3123→IG (in force since 01/07/2024), carried at the S3123 consortium "
+          "time-factor which steps 0.4167 → 0.500 (from 2026-01-01) → 0.333 (from "
+          "2026-04-01) by inception — so the S3123 QS to IG and IG equity add-backs "
+          "shrink as post-April renewals move onto the 0.333 sub-share.")
     rc = ws.cell(row=r, column=2, value=ri)
     rc.font = Font(name=_FB, size=9, color=INK)
     rc.alignment = Alignment(wrap_text=True, vertical="top")
@@ -2750,10 +2774,17 @@ def _methodology(wb, params, changes):
         ("FUL", "Gross → External QS (outwards RI slots by inception) → IGR QS 50% ceded "
          "to FIBL → IGR XoL $245m xs $50m → Net retained."),
         ("FIID", "Same cascade as FUL with IGR QS 85% and IGR XoL $72.5m xs $7.5m."),
-        ("FIHL", "Group-consolidated gross — external cessions only (no intra-group IGR). "
-         "Equity-share basis."),
-        ("S3123", "Syndicate 3123 inwards 20% QS on consortium-eligible layers within the "
-         "treaty window; IG equity slice applied. Excluded spacecraft per parameters."),
+        ("FIHL", "Group-consolidated, external cessions only (no intra-group IGR). The "
+         "book's headline is the COMBINED (Exec) basis — ex-add-on gross/net PLUS the "
+         "S3123 QS to IG and the IG equity share — matching the manual Change Narrative. "
+         "The ex-add-on split lives on the S3123 & Equity (IG) tab."),
+        ("S3123", "Inwards QS to IG = per-S/C exposure × 20% cession × the S3123 consortium "
+         "time-factor (0.4167 for inception < 2026-01-01, 0.500 from 2026-01-01, 0.333 from "
+         "2026-04-01), applied to S3123-ELIGIBLE layers only: is-consortium AND inception "
+         "within 2024-07-01…2026-12-31 AND not on the excluded-spacecraft list. IG equity "
+         "share = per-S/C × equity % (by inception year, consortium-gated) × the SAME "
+         "consortium factor. Both are computed per layer and aggregate to the Summary / "
+         "S3123 & Equity tab via SUMPRODUCT (live from Per Layer)."),
     ]
     r = _hdr(ws, r, 2, ["Entity", "Cascade"], [16, 108])
     for k, (e, d) in enumerate(wf):
@@ -3441,6 +3472,17 @@ def _s3123_ig_addons(wb, grid, params, per_layer=None):
                           "the IG book. The 20% QS it cedes back to IG is the "
                           "SAME cession shown as 'S3123 QS to IG' here; the two "
                           "must always agree."),
+        ("How computed", "S3123 QS to IG = per-S/C exposure × 20% cession × the "
+                         "S3123 consortium time-factor (0.4167 / 0.500 / 0.333 by "
+                         "inception: <2026-01-01 / ≥2026-01-01 / ≥2026-04-01), on "
+                         "S3123-eligible layers only (is-consortium AND inception in "
+                         "2024-07-01…2026-12-31 AND not excluded). IG equity = per-S/C "
+                         "× equity % (by inception year) × the same factor. For the "
+                         "additive scenarios these cells are LIVE — SUMPRODUCT over "
+                         "Per Layer (contribution × per-layer rate) — so they tie to "
+                         "the engine to the cent. Space Weather / Max Risk are "
+                         "selections (worst manufacturer / single bird), shown as "
+                         "engine values; reconcile on their own tabs."),
     ]
     r = 5
     for who, txt in notes:
