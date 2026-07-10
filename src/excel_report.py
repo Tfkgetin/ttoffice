@@ -350,6 +350,17 @@ _PL_KEEP = ["program_id", "layer_id", "entity", "mapping_code", "spacecraft_id",
 _SP_SCEN = {"Proton Flare": "pf", "Generic Defect": "gd", "Space Debris": "sd"}
 _SP_ENT = {"FIHL": "fihl", "FUL": "ful", "FIID": "fiid"}
 
+# Human-readable "primary" Per Layer columns kept visible; everything else is
+# computation backbone (scenario contributions, per-$ rates, selection/elig
+# flags) and is collapsed into an Excel column outline — hidden by default,
+# expandable via the +/- so nothing is lost.
+_PL_PRIMARY = {
+    "program_id", "layer_id", "entity", "mapping_code", "spacecraft_id",
+    "spacecraft_name", "orbit", "bus_manufacturer", "inception", "off_risk_date",
+    "rpf", "per_sc", "ext_qs", "s3123_qs", "equity_usd", "igr_qs_rate",
+    "igr_qs_ceded", "net_of_qs", "xol_ceded", "net_of_xol", "total_fibl_ceded",
+}
+
 
 def _pl_range(colmap, n, field):
     """Finite Per Layer data range $X$2:$X$n+1 for a mapped field, else None."""
@@ -1848,11 +1859,18 @@ def _per_layer(wb, per_layer, contrib=None):
     _PP_SRC = {"ext_qs_pp": "ext_qs", "igr_ceded_pp": "igr_qs_ceded",
                "s3123_qs_pp": "s3123_qs", "equity_pp": "equity_usd"}
     _idx = {name: j for j, name in enumerate(keep)}
+    # Collapse the computation-backbone columns (everything not primary) into an
+    # Excel outline — hidden by default, expandable. summaryRight=False puts the
+    # +/- on the left so the visible key columns aren't pushed off-screen.
+    ws.sheet_properties.outlinePr.summaryRight = False
     for j, name in enumerate(keep):
         c = ws.cell(row=1, column=1 + j, value=name)
         c.font = F_HDR; c.fill = FILL_HDR
-        ws.column_dimensions[get_column_letter(1 + j)].width = \
-            22 if name in ("spacecraft_name", "bus_manufacturer") else 13
+        cd = ws.column_dimensions[get_column_letter(1 + j)]
+        cd.width = 22 if name in ("spacecraft_name", "bus_manufacturer") else 13
+        if name not in _PL_PRIMARY:
+            cd.outlineLevel = 1
+            cd.hidden = True
     _per_col = (get_column_letter(_idx["per_sc"] + 1) if "per_sc" in _idx else None)
     for i, (_, row) in enumerate(per_layer[keep].iterrows(), start=2):
         for j, name in enumerate(keep):
