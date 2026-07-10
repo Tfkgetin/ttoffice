@@ -522,11 +522,19 @@ s2126_rds:
       2026-04-01 — so there is no Q-on-Q column. Very small exposure.
     change_narrative:
       "Proton Flare": >-
-        5% of GEO on the S2126 5/30 share; new participation from 2026-04-01,
-        no prior. Net = gross (no QS to IG).
+        $3.26m — 5% of all on-risk GEO at the new 5/30 (0.167) consortium line.
+        New participation from 2026-04-01, so no prior / no Q-on-Q; this is the
+        level, not a move. Net = gross (no QS to IG; retains 100%).
       "Space Weather": >-
-        Worst single bus type (top-4 aggregate) at the 5/30 share. Net = gross.
+        $14.11m — top-4 exposures within the worst Lloyd's bus-type group at the
+        5/30 share. The largest S2126 RDS (a concentrated GEO bus group). Net =
+        gross.
       "Generic Defect": >-
-        Top-10 GEO/MEO losses (RPF-adjusted, 50%) at the 5/30 share. Net = gross.
+        $6.24m — top-10 GEO/MEO losses (RPF-adjusted, 50%) at the 5/30 share;
+        same selection and RPF basis as S3123, scaled to the smaller line.
+        Net = gross.
       "Space Debris": >-
-        Worst LEO altitude group (RPF-adjusted) at the 5/30 share. Net = gross.
+        $0 — structurally zero this quarter. Space Debris is a LEO scenario and
+        every on-risk LEO layer incepted BEFORE 2026-04-01, where the S2126
+        factor is 0 — so S2126 holds no LEO share yet (not a data gap). It will
+        populate once a post-April LEO risk is written. Net = gross.
