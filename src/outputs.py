@@ -47,6 +47,14 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
         s3grid = s3123_mod.s3123_grid(per_layer, params)
         s3grid.to_csv(out / "s3123_grid.csv", index=False)
 
+    # Build the S2126 grid early too, so both syndicate columns can be filled in
+    # the RDS Input Template (H = S3123, I = S2126) inside write_results.
+    s2grid = None
+    if (params.raw.get("s2126_rds") or {}).get("enabled"):
+        from . import s3123 as s3123_mod
+        s2grid = s3123_mod.s3123_grid(per_layer, params, cfg_key="s2126_rds",
+                                      factor_col="s2126_factor", label="S2126")
+
     # Per-layer syndicate contribution columns (gross + net per RDS) so the
     # Lloyd's Summary tabs render Gross/Net as live =SUM(Per Layer) formulas.
     # Attached BEFORE the Per Layer sheet is written; selection is baked in.
@@ -158,7 +166,8 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
         per_layer, sw, mr, summary, params,
         source=params.ingest.get("source", "?"), recon=recon,
         changes=chg, excluded=excluded,
-        corrections=corrections, manual_includes=manual_includes)
+        corrections=corrections, manual_includes=manual_includes,
+        s3123_grid=s3grid, s2126_grid=s2grid)
 
     # S3123 (Lloyd's) RDS — separate syndicate tab + reconciliation
     if s3grid is not None:
