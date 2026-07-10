@@ -1160,6 +1160,20 @@ def _parameters(wb, params):
              "inwards QS time-factor by inception (12.5/30, 15/30, 10/30)",
              pct=True, bold_val=False)
 
+    # S2126 \u2014 new consortium participant (2026-04-01, 5/30). Own syndicate RDS;
+    # NO QS-to-IG, so it does not touch the IG book.
+    _s2126 = getattr(params, "s2126_factors", []) or []
+    if _s2126:
+        psection("S2126 consortium (new 2026-04-01)")
+        for _frm, _fac in _s2126:
+            prow(f"S2126 consortium factor \u2014 inception \u2265 {_frm}", float(_fac),
+                 "sub-share S3123 released on 2026-04-01 (5/30); own RDS",
+                 pct=True, bold_val=False)
+        _s2c = (params.raw.get("s2126_rds") or {}) if hasattr(params, "raw") else {}
+        prow("S2126 QS to IG", float(_s2c.get("qs_to_ig", 0.0)),
+             "no QS-to-IG agreement \u2014 net = gross (retains 100%); does NOT touch "
+             "the IG book", pct=True, bold_val=False)
+
     psection("Scenario loss factors")
     prow("Proton Flare insured loss", sc["proton_flare"]["insured_loss"],
          "GEO-GSO only, no time decay", pct=True)
@@ -2789,6 +2803,13 @@ def _methodology(wb, params, changes):
          "share = per-S/C × equity % (by inception year, consortium-gated) × the SAME "
          "consortium factor. Both are computed per layer and aggregate to the Summary / "
          "S3123 & Equity tab via SUMPRODUCT (live from Per Layer)."),
+        ("S2126", "New consortium participant from 2026-04-01. On that date S3123's sub-share "
+         "stepped 15/30 → 10/30 (0.500 → 0.333) and S2126 picked up the released 5/30 (0.167); "
+         "IG base 30 and TPC 6 unchanged. S2126 gets its OWN Lloyd's RDS (same scenarios, RPF "
+         "and eligibility as S3123) on a per-S/C × s2126_factor (0 before 2026-04-01, 5/30 "
+         "after) share. It has NO QS-to-IG agreement, so it retains 100% (net = gross) and does "
+         "NOT touch the IG book — the S3123 QS-to-IG / equity fall with the 0.333 factor and are "
+         "NOT offset by S2126. Reported on the 'S2126 RDS Summary' tab. Controlling-body id 7."),
     ]
     r = _hdr(ws, r, 2, ["Entity", "Cascade"], [16, 108])
     for k, (e, d) in enumerate(wf):
