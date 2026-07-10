@@ -103,7 +103,9 @@ _JJ_ORDER = ["Proton Flare", "Space Weather", "Generic Defect", "Space Debris"]
 
 def write_lloyds_rds_summary(wb, grid, as_at="", sw_view=None,
                              risk_appetite=None, prior=None, qoq_note=None,
-                             params=None, change_narrative=None):
+                             params=None, change_narrative=None,
+                             sheet_name="Lloyds RDS Summary", syndicate_no="3123",
+                             cfg_key="s3123_rds", factors=None):
     """Render the Lloyd's (S3123) RDS summary tab from the pipeline's COMPUTED
     grid (gross + net) — it does not depend on the Lloyd's SQL views, which are
     currently unreadable (a varchar->int CAST in the view dies on 'BJ-3C 01').
@@ -114,9 +116,9 @@ def write_lloyds_rds_summary(wb, grid, as_at="", sw_view=None,
       risk_appetite : optional USD threshold; RDS gross above it flags a breach.
       prior         : optional {scenario: gross} for a Q-on-Q change column.
     """
-    if "Lloyds RDS Summary" in wb.sheetnames:
-        del wb["Lloyds RDS Summary"]
-    ws = wb.create_sheet("Lloyds RDS Summary")
+    if sheet_name in wb.sheetnames:
+        del wb[sheet_name]
+    ws = wb.create_sheet(sheet_name)
     ws.sheet_view.showGridLines = False
     for col, w in zip("ABCDEFGHI", [3, 46, 40, 15, 15, 15, 15, 14, 14]):
         ws.column_dimensions[col].width = w
@@ -125,12 +127,19 @@ def write_lloyds_rds_summary(wb, grid, as_at="", sw_view=None,
     g = grid.set_index("scenario") if grid is not None and len(grid) else _pd.DataFrame()
     prior = prior or {}
     prior_label = prior.get("_label", "prior")
+    syn = f"S{syndicate_no}"
+    # net basis: derive from the syndicate's QS-to-IG (0 -> retains 100%)
+    _cfg0 = params.raw.get(cfg_key, {}) if (params is not None
+                                            and hasattr(params, "raw")) else {}
+    _qs = float(_cfg0.get("qs_to_ig", 0.20))
+    net_basis = ("no QS to IG — retains 100% (net = gross)" if _qs == 0
+                 else f"net of the {_qs:.0%} QS to IG")
 
     r = 2
-    ws.cell(r, 2, "Lloyd's RDS Summary — Syndicate 3123").font = _f(16, True, NAVY)
+    ws.cell(r, 2, f"Lloyd's RDS Summary — Syndicate {syndicate_no}").font = _f(16, True, NAVY)
     r += 1
-    ws.cell(r, 2, f"Space · S3123 · as at {as_at} · syndicate share, net of the "
-            f"20% QS to IG · computed in-engine · prior = {prior_label}"
+    ws.cell(r, 2, f"Space · {syn} · as at {as_at} · syndicate share, {net_basis}"
+            f" · computed in-engine · prior = {prior_label}"
             ).font = _f(10, False, SOFT)
     r += 2
 
@@ -138,7 +147,7 @@ def write_lloyds_rds_summary(wb, grid, as_at="", sw_view=None,
     ws.cell(r, 2, "RDS — realistic disaster scenarios").font = _f(12, True, NAVY)
     r += 1
     if not len(g):
-        r = _banner(ws, r, "No S3123 grid — enable s3123_rds in the config.")
+        r = _banner(ws, r, f"No {syn} grid — enable {cfg_key} in the config.")
     else:
         r = _header(ws, r, ["RDS Name", "RDS Description", "Gross", "Net",
                             "Prior Gross", "Prior Net", "Δ Gross", "Δ Net"],
@@ -273,7 +282,7 @@ def write_lloyds_rds_summary(wb, grid, as_at="", sw_view=None,
     # ---------------- Parameters & methodology --------------------------- #
     ws.cell(r, 2, "Parameters & methodology").font = _f(12, True, NAVY)
     r += 1
-    r = _header(ws, r, ["RDS", "Definition (at the S3123 share, RPF-adjusted)"],
+    r = _header(ws, r, ["RDS", f"Definition (at the {syn} share, RPF-adjusted)"],
                 [46, 80])
     for scen in _JJ_ORDER:
         name, desc = _JJ.get(scen, (scen, ""))
@@ -296,16 +305,22 @@ def write_lloyds_rds_summary(wb, grid, as_at="", sw_view=None,
 
     rows = []
     if params is not None:
-        cfg = params.raw.get("s3123_rds", {}) if hasattr(params, "raw") else {}
+        cfg = params.raw.get(cfg_key, {}) if hasattr(params, "raw") else {}
+        _facs = factors if factors is not None else getattr(params, "s3123_factors", [])
         try:
-            rows.append(("S3123 consortium share (schedule)",
-                         " · ".join(f"{d}: {f:.3f}" for d, f in params.s3123_factors)))
+            rows.append((f"{syn} consortium share (schedule)",
+                         " · ".join(f"{d}: {f:.3f}" for d, f in _facs)))
         except Exception:  # noqa: BLE001
             pass
-        qs = cfg.get("qs_to_ig", 0.20)
+        qs = float(cfg.get("qs_to_ig", 0.20))
         nexcl = len(cfg.get("qs_to_ig_excluded") or [])
-        rows.append(("QS ceded to IG", f"{qs:.0%} — net = gross × {1 - qs:.2f}; "
-                     f"{nexcl} spacecraft above the 30m IG line retain 100%"))
+        if qs == 0:
+            rows.append(("QS ceded to IG", "0% — no QS-to-IG agreement; net = gross "
+                         "(retains 100%). The S3123 above-IG-line exclusion does "
+                         "not apply here (UW-confirmed)."))
+        else:
+            rows.append(("QS ceded to IG", f"{qs:.0%} — net = gross × {1 - qs:.2f}; "
+                         f"{nexcl} spacecraft above the 30m IG line retain 100%"))
         ap = (cfg.get("lloyds_summary", {}) or {}).get("risk_appetite_usd")
         if ap:
             rows.append(("Lloyd's risk appetite", f"${float(ap):,.0f}"))
@@ -328,10 +343,17 @@ def write_lloyds_rds_summary(wb, grid, as_at="", sw_view=None,
         if grps:
             rows.append(("LEO altitude groups (Space Debris)",
                          " · ".join(f"{g['name']}: {g['low']}–{g['high']} km" for g in grps)))
-    rows.append(("Basis / validation",
-                 "Computed at the S3123 syndicate share, net of the 20% QS to "
-                 "IG. Solar-particle & Design-deficiency reproduce JJ's 2026Q1 "
-                 "(gross AND net) to ~$3."))
+    if _qs == 0:
+        rows.append(("Basis / validation",
+                     f"Computed at the {syn} consortium share (same methodology, "
+                     f"RPF and scenario definitions as S3123), {net_basis}. New "
+                     f"participant from 2026-04-01 (5/30 share) — no prior filing "
+                     f"to reconcile; very small exposure."))
+    else:
+        rows.append(("Basis / validation",
+                     "Computed at the S3123 syndicate share, net of the 20% QS to "
+                     "IG. Solar-particle & Design-deficiency reproduce JJ's 2026Q1 "
+                     "(gross AND net) to ~$3."))
     for label, val in rows:
         _param(label, val)
         r += 1

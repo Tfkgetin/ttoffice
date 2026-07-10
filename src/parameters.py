@@ -27,6 +27,10 @@ class Params:
     entities: list
     ingest: dict
     raw: dict = field(repr=False, default_factory=dict)
+    # S2126 consortium sub-share schedule [(from_date, factor)] — the new
+    # consortium participant from 2026-04-01 (5/30). Empty if the quarter's
+    # config predates S2126, in which case s2126_factor() returns 0 throughout.
+    s2126_factors: list = field(default_factory=list)
 
     @classmethod
     def load(cls, path: str) -> "Params":
@@ -59,6 +63,10 @@ class Params:
             entities=c["entities"],
             ingest=c["ingest"],
             raw=c,
+            s2126_factors=sorted(
+                [(_d(x["from"]), x["factor"])
+                 for x in c.get("s2126_consortium_factors", [])]
+            ),
         )
 
     # --- lookups mirroring the workbook semantics ---
@@ -93,6 +101,16 @@ class Params:
         """XLOOKUP exact-or-next-smaller on date."""
         f = 0.0
         for d, factor in self.s3123_factors:
+            if inception >= d:
+                f = factor
+        return f
+
+    def s2126_factor(self, inception: dt.date) -> float:
+        """S2126 consortium sub-share (XLOOKUP exact-or-next-smaller on date).
+        0 before the S2126 participation start (2026-04-01) and when the config
+        carries no S2126 schedule."""
+        f = 0.0
+        for d, factor in self.s2126_factors:
             if inception >= d:
                 f = factor
         return f

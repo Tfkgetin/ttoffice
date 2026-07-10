@@ -167,6 +167,49 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
         _wbl.save(_fpl)
         print("      Lloyd's RDS Summary tab written (last tab); S3123 RDS hidden")
 
+    # S2126 (Lloyd's) RDS — new consortium participant from 2026-04-01. SAME
+    # methodology and code path as S3123, differing only by config: 5/30 sub-share
+    # and qs_to_ig=0 (no cession to IG, so net = gross; retains 100%). Does NOT
+    # touch the IG book. Very small exposure. Own visible 'S2126 RDS' tab.
+    if (params.raw.get("s2126_rds") or {}).get("enabled"):
+        from . import s3123 as s3123_mod, s3123_sheet
+        s2grid = s3123_mod.s3123_grid(
+            per_layer, params, cfg_key="s2126_rds",
+            factor_col="s2126_factor", label="S2126")
+        s2grid.to_csv(out / "s2126_grid.csv", index=False)
+        import openpyxl as _opx3
+        _fp2 = str(out / f"Space_RDS_results_{params.as_at}.xlsx")
+        _wb2 = _opx3.load_workbook(_fp2)
+        s3123_sheet.write_s3123_sheet(
+            _wb2, s2grid, as_at=str(params.as_at),
+            sheet_name="S2126 RDS",
+            title="S2126 RDS — Syndicate 2126 (Lloyd's)",
+            subtitle=(f"New consortium participant from 2026-04-01 (5/30 share) · "
+                      f"no QS to IG — retains 100% (net = gross) · as at {params.as_at}"))
+        _wb2.save(_fp2)
+        print("      S2126 RDS tab written (new syndicate; no QS to IG)")
+
+        # Polished Lloyd's RDS Summary for S2126 (mirrors S3123's last tab).
+        s2cfg = (params.raw.get("s2126_rds") or {})
+        if (s2cfg.get("lloyds_summary") or {}).get("enabled"):
+            from . import lloyds_sheet as _lls
+            l2 = s2cfg["lloyds_summary"]
+            views2 = ingest_mod.load_lloyds_rds_summary(params)   # shared Lloyd's views
+            sw_view2 = (views2 or {}).get("space_weather")
+            _wb3 = _opx3.load_workbook(_fp2)
+            _lls.write_lloyds_rds_summary(
+                _wb3, s2grid, as_at=str(params.as_at), sw_view=sw_view2,
+                risk_appetite=l2.get("risk_appetite_usd"),
+                prior=None, qoq_note=l2.get("qoq_note"), params=params,
+                change_narrative=l2.get("change_narrative"),
+                sheet_name="S2126 RDS Summary", syndicate_no="2126",
+                cfg_key="s2126_rds", factors=params.s2126_factors)
+            # raw computed 'S2126 RDS' tab superseded by the summary — hide it
+            if "S2126 RDS" in _wb3.sheetnames:
+                _wb3["S2126 RDS"].sheet_state = "hidden"
+            _wb3.save(_fp2)
+            print("      S2126 RDS Summary tab written; raw S2126 RDS hidden")
+
     # persist this run so future quarters can diff against it
     persist.save_run(params, per_layer, summary)
     if chg:

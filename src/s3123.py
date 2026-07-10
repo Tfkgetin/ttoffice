@@ -65,8 +65,8 @@ def _as_date(x):
 # --------------------------------------------------------------------------- #
 # config access (params.raw["s3123_rds"]) with safe defaults
 # --------------------------------------------------------------------------- #
-def _cfg(p) -> dict:
-    c = (p.raw.get("s3123_rds") or {}) if hasattr(p, "raw") else {}
+def _cfg(p, key: str = "s3123_rds") -> dict:
+    c = (p.raw.get(key) or {}) if hasattr(p, "raw") else {}
     sc = c.get("scenarios", {})
     # FIX(recon 2026Q1, O2): honor `active: false` — the 2026Q1 config carried
     # agg_xol {limit: 30m, attach: 0, active: false} and the old code ignored
@@ -93,7 +93,8 @@ def _cfg(p) -> dict:
     }
 
 
-def s3123_share(df: pd.DataFrame, cfg: dict | None = None) -> pd.Series:
+def s3123_share(df: pd.DataFrame, cfg: dict | None = None,
+                factor_col: str = "s3123_factor") -> pd.Series:
     """Per-layer S3123 share of the signed line, gated by consortium eligibility.
 
     Two share sources (config s3123_rds.share):
@@ -107,7 +108,9 @@ def s3123_share(df: pd.DataFrame, cfg: dict | None = None) -> pd.Series:
 
     FIX(recon 2026Q1, D5): previously ungated — every layer received a share.
     """
-    share = df["per_sc"].astype(float) * df["s3123_factor"].astype(float)
+    if factor_col not in df.columns:      # e.g. config without an S2126 schedule
+        return pd.Series(0.0, index=df.index)
+    share = df["per_sc"].astype(float) * df[factor_col].astype(float)
     if (cfg or {}).get("share_source") == "lloyds_view" \
             and "lloyds_signed_share" in df.columns:
         lv = pd.to_numeric(df["lloyds_signed_share"], errors="coerce")
@@ -258,19 +261,27 @@ _CALC = {
 }
 
 
-def s3123_grid(df: pd.DataFrame, p) -> pd.DataFrame:
-    """S3123 RDS by scenario — gross + net, at the syndicate's share."""
+def s3123_grid(df: pd.DataFrame, p, cfg_key: str = "s3123_rds",
+               factor_col: str = "s3123_factor",
+               label: str = "S3123") -> pd.DataFrame:
+    """Syndicate RDS by scenario — gross + net, at the syndicate's consortium
+    share. Parameterised so the SAME methodology serves both S3123 and S2126:
+      * cfg_key    — config block (s3123_rds / s2126_rds)
+      * factor_col — per-layer sub-share column (s3123_factor / s2126_factor)
+      * label      — grid entity tag (S3123 / S2126)
+    S2126 differs only by config: 5/30 factor and qs_to_ig=0 (no cession to IG,
+    so net = gross). Same scenarios, RPF, eligibility gate."""
     if "lloyds_bus_type" not in df.columns:
         df = df.copy()
         df["lloyds_bus_type"] = None
-    cfg = _cfg(p)
-    share = s3123_share(df, cfg)     # FIX(recon 2026Q1, D5): eligibility-gated
+    cfg = _cfg(p, cfg_key)
+    share = s3123_share(df, cfg, factor_col)  # FIX(recon 2026Q1, D5): eligibility-gated
     rows = []
     for scen in SCEN_ORDER:
         if scen == "Max Risk" and not cfg["max_risk"]:
             continue
         gross, net, detail, _ = _CALC[scen](df, share, cfg)
-        rows.append({"entity": "S3123", "scenario": scen, "detail": detail,
+        rows.append({"entity": label, "scenario": scen, "detail": detail,
                      "gross": float(gross), "net": float(net)})
     return pd.DataFrame(rows)
 

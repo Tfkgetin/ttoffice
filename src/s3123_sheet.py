@@ -39,16 +39,18 @@ def _quality_flags(grid):
     return flags
 
 
-def write_s3123_sheet(wb, grid, recon=None, notes=None, as_at="2026-04-01", qoq=None):
-    if "S3123 RDS" in wb.sheetnames:
-        del wb["S3123 RDS"]
-    ws=wb.create_sheet("S3123 RDS")
+def write_s3123_sheet(wb, grid, recon=None, notes=None, as_at="2026-04-01", qoq=None,
+                      sheet_name="S3123 RDS", title="S3123 RDS — Syndicate 3123 (Lloyd's)",
+                      subtitle=None):
+    if sheet_name in wb.sheetnames:
+        del wb[sheet_name]
+    ws=wb.create_sheet(sheet_name)
     ws.sheet_view.showGridLines=False
     for col,w in zip("ABCDEFGH",[3,22,30,16,16,16,16,42]): ws.column_dimensions[col].width=w
     r=2
-    ws.cell(r,2,"S3123 RDS — Syndicate 3123 (Lloyd's)").font=_f(16,True,NAVY)
+    ws.cell(r,2,title).font=_f(16,True,NAVY)
     r+=1
-    ws.cell(r,2,f"Reported separately from the IG return · as at {as_at} · clean Lloyd's structure").font=_f(10,False,SOFT)
+    ws.cell(r,2,subtitle or f"Reported separately from the IG return · as at {as_at} · clean Lloyd's structure").font=_f(10,False,SOFT)
     r+=1
     # ---- data-quality banners (FIX recon 2026Q1, O2) ----
     for flag in _quality_flags(grid):
