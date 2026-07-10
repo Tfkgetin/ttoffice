@@ -278,8 +278,17 @@ def s3123_layer_contribs(df: pd.DataFrame, p, cfg_key: str = "s3123_rds",
     that scenario, so the Lloyd's Summary can render Gross/Net as live
     =SUM(Per Layer) formulas (the same backbone the IG Summary uses).
 
-    Columns: {prefix}_{slug}_g (gross) and {prefix}_{slug}_n (net) for each of
-    the four JJ scenarios (pf/sw/gd/sd).
+    Columns per syndicate:
+      * {prefix}_{slug}_g / _n  — gross / net contribution (per JJ scenario)
+      * {prefix}_rds_elig       — RDS share-eligibility gate (1/0): is_consortium
+                                  AND inception >= consortium_start. This and the
+                                  selection flag are the only irreducible engine
+                                  inputs; everything dollar-valued is rebuilt on
+                                  the sheet as per_sc x factor x elig x loss x rpf.
+      * {prefix}_{slug}_sel     — 1 if the layer is in that scenario's picked set
+                                  (top-N / worst-group / all-GEO), else 0. Selection
+                                  is a portfolio ranking, so it cannot be a per-cell
+                                  formula — the flag carries it.
 
     Net = gross per line, less the QS cession to IG (excluded spacecraft retain
     100%). This decomposition is exact ONLY while there is no active Agg XoL
@@ -297,11 +306,25 @@ def s3123_layer_contribs(df: pd.DataFrame, p, cfg_key: str = "s3123_rds",
     net_decomposable = not cfg["agg_xol"]
     cede = df["spacecraft_id"].map(lambda s: 0.0 if s in excl else qs).astype(float)
     out = pd.DataFrame(index=df.index)
+    # RDS share-eligibility gate (mirrors s3123_share): is_consortium AND
+    # inception >= consortium_start. Emitted so the sheet's gross formula can
+    # reproduce the engine share (per_sc x factor is otherwise non-zero for
+    # ineligible layers, which the engine gates to zero).
+    cons_start = cfg.get("consortium_start", CONSORTIUM_START)
+    if "is_consortium" in df.columns:
+        elig = df["is_consortium"].fillna(False).astype(bool)
+    else:
+        elig = pd.Series(True, index=df.index)
+    elig = elig & (df["inception"].map(_as_date) >= cons_start)
+    out[f"{prefix}_rds_elig"] = elig.astype(float)
     for scen, slug in SCEN_SLUG.items():
         _, _, _, line = _CALC[scen](df, share, cfg)  # per-line gross Series
         g = pd.Series(0.0, index=df.index)
+        sel = pd.Series(0.0, index=df.index)
         if len(line):
             g.loc[line.index] = line.astype(float)
+            sel.loc[line.index] = 1.0
+        out[f"{prefix}_{slug}_sel"] = sel
         out[f"{prefix}_{slug}_g"] = g
         if net_decomposable:
             out[f"{prefix}_{slug}_n"] = g * (1.0 - cede)
