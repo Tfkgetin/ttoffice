@@ -329,10 +329,11 @@ _PL_KEEP = ["program_id", "layer_id", "entity", "mapping_code", "spacecraft_id",
             # backbone the Summary & S3123 tabs SUMPRODUCT against so those
             # aggregates are live formulas, not baked numbers (additive scenarios).
             "pf_ful", "pf_fiid", "gd_ful", "gd_fiid", "sd_ful", "sd_fiid",
-            # FIHL contribution to the SELECTION scenarios (worst-manufacturer
-            # Space Weather / largest-spacecraft Max Risk) — selection baked in,
-            # so their ex-add-on gross on the S3123 & Equity tab is a live SUM.
-            "sw_fihl", "mr_fihl",
+            # per-entity contribution to the SELECTION scenarios (worst-
+            # manufacturer Space Weather / largest-spacecraft Max Risk) —
+            # selection baked in, so their gross / Ext-QS / IGR on the Summary
+            # and S3123 & Equity tab are live SUM / SUMPRODUCT over Per Layer.
+            "sw_fihl", "sw_ful", "sw_fiid", "mr_fihl", "mr_ful", "mr_fiid",
             "ext_qs_pp", "igr_ceded_pp", "s3123_qs_pp", "equity_pp",
             # per-layer S3123 / S2126 syndicate contributions per RDS. The _g
             # (gross) and _n (net) cells are LIVE formulas built from per_sc x
@@ -350,8 +351,11 @@ _PL_KEEP = ["program_id", "layer_id", "entity", "mapping_code", "spacecraft_id",
             "s2126_gd_sel", "s2126_gd_g", "s2126_gd_n",
             "s2126_sd_sel", "s2126_sd_g", "s2126_sd_n"]
 
-# additive scenarios only — selections (Space Weather / Max Risk) are not sums
+# scenario -> slug. _SP_SCEN is the additive-only subset; _SP_SCEN_ALL adds the
+# selection scenarios, which now also have per-layer contribution columns
+# (sw/mr_{fihl,ful,fiid}) so the Summary can SUM/SUMPRODUCT them too.
 _SP_SCEN = {"Proton Flare": "pf", "Generic Defect": "gd", "Space Debris": "sd"}
+_SP_SCEN_ALL = {**_SP_SCEN, "Space Weather": "sw", "Max Risk": "mr"}
 _SP_ENT = {"FIHL": "fihl", "FUL": "ful", "FIID": "fiid"}
 # per-layer FIHL contribution column for EVERY scenario (additive + selection),
 # so the FIHL ex-add-on gross / S3123-QS / equity on the S3123 & Equity tab are
@@ -523,21 +527,29 @@ def _summary(ws, grid, params, source, per_layer, addon_refs=None):
             _cell(ws, r, 2, val("scenario"), alt=alt)
             _cell(ws, r, 3, val("detail") or "", alt=alt)
             is_fihl = (entity == "FIHL")
-            addons = (float(val("s3123_qs") or 0) + float(val("equity_usd") or 0)) \
-                if is_fihl else 0.0
-            # Gross: FIHL shows COMBINED (ex-add-on gross + S3123 QS + equity);
-            # the ex-add-on figure sits in the memo columns. FUL/FIID unchanged.
-            gross_disp = (float(val("gross") or 0) + addons) if is_fihl else val("gross")
-            cD = _cell(ws, r, 4, gross_disp, alt=alt, money=True)
-            if not is_fihl:  # FIHL D is overwritten with =SUM(L:N) below + noted there
-                _note(cD, "Gross = worst-case scenario aggregate over the Per Layer "
-                          "tab: sum of eligible per-layer exposure (per_sc) x the "
-                          "scenario factor. Reconcile on Per Layer / Netting "
-                          "Waterfalls.")
-            # contribution column for this entity x scenario (additive scenarios)
             _scn = val("scenario")
-            _contrib = (f"{_SP_SCEN[_scn]}_{_SP_ENT[entity]}"
-                        if _scn in _SP_SCEN and entity in _SP_ENT else None)
+            # per-layer contribution column for this entity x scenario — additive
+            # AND selection (sw/mr_{fihl,ful,fiid} now exist), so the whole row can
+            # drive off Per Layer.
+            _contrib = (f"{_SP_SCEN_ALL[_scn]}_{_SP_ENT[entity]}"
+                        if _scn in _SP_SCEN_ALL and entity in _SP_ENT else None)
+            _grng = _pl_range(_plc, _plN, _contrib) if _contrib else None
+            # Gross (col D): FIHL = =SUM(L:N) (memo columns, themselves live from
+            # Per Layer) set below; FUL/FIID = live =SUM(per-layer contribution).
+            if is_fihl:
+                addons = float(val("s3123_qs") or 0) + float(val("equity_usd") or 0)
+                cD = _cell(ws, r, 4, float(val("gross") or 0) + addons,
+                           alt=alt, money=True)   # placeholder; =SUM(L:N) below
+            elif _grng:
+                cD = _cell(ws, r, 4, f"=SUM({_grng})", alt=alt, money=True)
+                _note(cD, "LIVE: =SUM over Per Layer of this entity/scenario "
+                          "per-layer loss contribution. Ties to the engine to the "
+                          "cent; edit Per Layer and it recomputes.")
+            else:
+                cD = _cell(ws, r, 4, val("gross"), alt=alt, money=True)
+                _note(cD, "Gross = worst-case scenario aggregate over the Per Layer "
+                          "tab (per_sc x scenario factor). Reconcile on Per Layer / "
+                          "Netting Waterfalls.")
             # Ext QS — LIVE SUMPRODUCT for additive scenarios; engine value + note
             # for Space Weather / Max Risk (selections, not per-layer sums).
             _extf = _sumproduct(_plc, _plN, _contrib, "ext_qs_pp") if _contrib else None
@@ -580,10 +592,20 @@ def _summary(ws, grid, params, source, per_layer, addon_refs=None):
             # Net of QS = Net of Ext QS - IGR QS Ceded  (live)
             f8 = f"=F{r}-G{r}" if val("net_of_qs") is not None else None
             _cell(ws, r, 8, f8, alt=alt, money=True)
-            cI = _cell(ws, r, 9, val("xol_ceded"), alt=alt, money=True)
-            _note(cI, f"IGR XoL recovery - 0 unless this scenario's net-of-QS "
-                      f"pierces the {entity} attachment. Terms (excess / limit) on "
-                      f"Parameters -> IGR {entity} XoL. Drill: Netting Waterfalls.")
+            _xt = (getattr(params, "igr_xol", {}) or {}).get(entity)
+            if _xt and not is_fihl:
+                _ded = float(_xt["deductible"]); _lim = float(_xt["limit"])
+                cI = _cell(ws, r, 9, f"=MAX(0,MIN(H{r}-{_ded:.0f},{_lim:.0f}))",
+                           alt=alt, money=True)
+                _note(cI, f"LIVE: IGR XoL recovery = MAX(0, MIN(net-of-QS (H{r}) − "
+                          f"{_ded:,.0f} excess, {_lim:,.0f} limit)) — recomputes from "
+                          f"the Per-Layer-driven H. Terms on Parameters → IGR "
+                          f"{entity} XoL.")
+            else:
+                cI = _cell(ws, r, 9, val("xol_ceded"), alt=alt, money=True)
+                _note(cI, f"IGR XoL recovery - 0 unless this scenario's net-of-QS "
+                          f"pierces the {entity} attachment. Terms (excess / limit) on "
+                          f"Parameters -> IGR {entity} XoL. Drill: Netting Waterfalls.")
             # Net: FIHL net = (net of QS − XoL) already carries add-ons because
             # for FIHL the cascade's IGR QS/XoL are zero and Gross is combined,
             # so H−I = combined net. FUL/FIID: standard H−I.
@@ -601,16 +623,28 @@ def _summary(ws, grid, params, source, per_layer, addon_refs=None):
             equity_ref = None
             if _memo_here:
                 memo_present = [m for m in FIHL_MEMO if m[0] in grid.columns]
-                # The split lives once on the "S3123 & Equity (IG)" tab; point
-                # each memo cell there as a live reference so it is not a baked
-                # number. Fall back to the raw value if refs aren't supplied.
+                # Drive the FIHL ex-add-on split DIRECTLY from Per Layer (not via
+                # the S3123 & Equity tab): ex-add-on gross = SUM(FIHL contribution),
+                # S3123 QS = SUMPRODUCT(contribution, s3123_qs/per_sc), IG Equity =
+                # SUMPRODUCT(contribution, equity/per_sc). Fall back to the S3123 &
+                # Equity ref, then the raw value, only if a column is missing.
+                _fcon = _FIHL_CONTRIB.get(val("scenario"))
+                _MEMOF = {
+                    "gross": (_pl_range(_plc, _plN, _fcon)
+                              and f"=SUM({_pl_range(_plc, _plN, _fcon)})"),
+                    "s3123_qs": _sumproduct(_plc, _plN, _fcon, "s3123_qs_pp") if _fcon else None,
+                    "equity_usd": _sumproduct(_plc, _plN, _fcon, "equity_pp") if _fcon else None,
+                }
                 _AKEY = {"gross": "gross_ex", "s3123_qs": "s3123_qs",
                          "equity_usd": "equity"}
                 aref = (addon_refs or {}).get("fihl", {}).get(val("scenario"))
                 asheet = (addon_refs or {}).get("sheet")
                 for j, (k, _lbl) in enumerate(memo_present):
+                    f = _MEMOF.get(k)
                     ref = aref.get(_AKEY[k]) if aref else None
-                    if ref and asheet:
+                    if f:
+                        _cell(ws, r, 12 + j, f, alt=alt, money=True)
+                    elif ref and asheet:
                         _cell(ws, r, 12 + j, f"='{asheet}'!{ref}", alt=alt, money=True)
                     else:
                         _cell(ws, r, 12 + j, val(k), alt=alt, money=True)
@@ -624,10 +658,10 @@ def _summary(ws, grid, params, source, per_layer, addon_refs=None):
                     cDf = _cell(ws, r, 4, f"=SUM(L{r}:{last}{r})", alt=alt, money=True)
                     _note(cDf, "FIHL headline = COMBINED Exec basis = ex-add-on "
                                "gross (L) + S3123 QS to IG (M) + IG Equity (N), the "
-                               "memo cells to the right. Those three live once on "
-                               "the 'S3123 & Equity (IG)' tab (L:N reference it). "
-                               "The ex-add-on gross reconciles as the worst-case "
-                               "aggregate over Per Layer.")
+                               "memo cells to the right. All three are LIVE — SUM / "
+                               "SUMPRODUCT over the Per Layer tab (FIHL contribution "
+                               "× per-layer rate) — so this whole build-up ties to "
+                               "the engine to the cent and recomputes off Per Layer.")
             # capture this row's cell refs for downstream live-formula sheets
             rowmap[(entity, val("scenario"))] = {
                 "gross": f"D{r}", "ext_qs": f"E{r}", "igr_qs": f"G{r}",
