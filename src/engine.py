@@ -186,6 +186,11 @@ def run_engine(df: pd.DataFrame, p) -> pd.DataFrame:
     df["equity_pct"] = df.apply(
         lambda r: p.equity_pct(r["inception"], r["is_consortium"]), axis=1)
     df["s3123_factor"] = df["inception"].map(p.s3123_factor)
+    # S2126 consortium sub-share (new participant from 2026-04-01, 5/30); 0 before
+    # then / when the config carries no S2126 schedule. Used ONLY by the separate
+    # S2126 syndicate RDS — S2126 has NO QS to IG, so it does not touch the IG
+    # book (no s2126_qs / equity add-back).
+    df["s2126_factor"] = df["inception"].map(p.s2126_factor)
     # FIX(recon 2026Q1, fix #7): per_sc basis (was exposure_usd) — mirrors s3123_qs.
     df["equity_usd"] = df["per_sc"] * df["equity_pct"] * df["s3123_factor"]
 

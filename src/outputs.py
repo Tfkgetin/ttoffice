@@ -167,6 +167,28 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
         _wbl.save(_fpl)
         print("      Lloyd's RDS Summary tab written (last tab); S3123 RDS hidden")
 
+    # S2126 (Lloyd's) RDS — new consortium participant from 2026-04-01. SAME
+    # methodology and code path as S3123, differing only by config: 5/30 sub-share
+    # and qs_to_ig=0 (no cession to IG, so net = gross; retains 100%). Does NOT
+    # touch the IG book. Very small exposure. Own visible 'S2126 RDS' tab.
+    if (params.raw.get("s2126_rds") or {}).get("enabled"):
+        from . import s3123 as s3123_mod, s3123_sheet
+        s2grid = s3123_mod.s3123_grid(
+            per_layer, params, cfg_key="s2126_rds",
+            factor_col="s2126_factor", label="S2126")
+        s2grid.to_csv(out / "s2126_grid.csv", index=False)
+        import openpyxl as _opx3
+        _fp2 = str(out / f"Space_RDS_results_{params.as_at}.xlsx")
+        _wb2 = _opx3.load_workbook(_fp2)
+        s3123_sheet.write_s3123_sheet(
+            _wb2, s2grid, as_at=str(params.as_at),
+            sheet_name="S2126 RDS",
+            title="S2126 RDS — Syndicate 2126 (Lloyd's)",
+            subtitle=(f"New consortium participant from 2026-04-01 (5/30 share) · "
+                      f"no QS to IG — retains 100% (net = gross) · as at {params.as_at}"))
+        _wb2.save(_fp2)
+        print("      S2126 RDS tab written (new syndicate; no QS to IG)")
+
     # persist this run so future quarters can diff against it
     persist.save_run(params, per_layer, summary)
     if chg:

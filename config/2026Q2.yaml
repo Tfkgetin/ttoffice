@@ -383,7 +383,7 @@ s3123_rds:
   agg_xol: { limit: 30000000, attach: null, active: false }  # consortium Agg XoL, 30m max/event; not attaching 2026Q1
   max_risk: true
 
-  scenarios:
+  scenarios: &s3123_scenarios
     proton_flare:   { type: full,         orbits: ["GEO-GSO"],                          loss: 0.05 }
     space_weather:  { type: bus_type_top, top_n: 4,                                     loss: 1.00 }
     # JJ's FILED basis (per vw_SpaceRDS_Generic_Defect_Lloyds): sum of the TOP 10
@@ -475,3 +475,31 @@ s3123_rds:
 
   # manual_compare: RETIRED from 2026Q2 - there is no manual book to tie to.
   # The S3123 RDS tab renders without the reconciliation block.
+
+# ============================================================================
+# S2126 — new consortium participant from 2026-04-01 (Syndicate 2126)
+# ----------------------------------------------------------------------------
+# On 01/04/2026 S3123 dropped its consortium share 15/30 -> 10/30 and S2126
+# picked up the 5/30 that was released (IG base 30, TPC 6 unchanged). S2126 has
+# NO QS-to-IG agreement, so it does NOT touch the IG book — the S3123 QS-to-IG
+# and IG equity correctly fall with the 0.333 factor and are NOT offset. S2126
+# gets its OWN syndicate RDS (same methodology as S3123), retaining 100%.
+# UW (John McGuinness): controlling-body id = 7; "very very small exposure".
+# OPEN: S2126 eligibility population / any separate exclusions — with UW.
+# ----------------------------------------------------------------------------
+# S2126 consortium sub-share schedule (XLOOKUP exact-or-next-smaller on
+# inception): 0 before participation, 5/30 from 2026-04-01.
+s2126_consortium_factors:
+  - { from: "1900-01-01", factor: 0.0 }                   # pre-participation
+  - { from: "2026-04-01", factor: 0.16666666666666666 }   # 5 / 30
+
+s2126_rds:
+  enabled: true
+  share: consortium_factor                       # per_sc * s2126_factor, consortium-gated
+  consortium_start: "2024-07-01"                 # same eligibility floor as S3123
+  qs_to_ig: 0.0                                  # NO QS to IG -> net = gross (retains 100%)
+  qs_to_ig_excluded: []                          # moot with qs_to_ig=0 (all retain 100%)
+  agg_xol: { limit: 30000000, attach: null, active: false }
+  max_risk: true
+  scenarios: *s3123_scenarios                    # identical scenario set to S3123
+  controlling_body_id: 7                          # UW reference (Controlling_Bodies_t)
