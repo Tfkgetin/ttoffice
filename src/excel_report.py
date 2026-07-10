@@ -1084,6 +1084,16 @@ def _parameters(wb, params):
         ws.cell(row=r, column=2, value=title).font = F_SECT
         r += 1
 
+    # Superseded time-scheduled factors are kept as record but COLLAPSED into an
+    # Excel outline (hidden by default, expandable) so the tab shows only what is
+    # current at the as-at. summaryBelow=True puts the +/- on the current row,
+    # which sits just under its historical rows.
+    ws.sheet_properties.outlinePr.summaryBelow = True
+
+    def _collapse(row_idx):
+        ws.row_dimensions[row_idx].outlineLevel = 1
+        ws.row_dimensions[row_idx].hidden = True
+
     _sqlc = (params.ingest.get("sql") or {}) if isinstance(params.ingest, dict) else {}
     _srv = _sqlc.get("server", "LON-SQLP-V005")
     _db = _sqlc.get("database", "SpaceTrax_Data")
@@ -1129,20 +1139,29 @@ def _parameters(wb, params):
          "row was added)", bold_val=False)
 
     psection("External Quota Share (outwards RI)")
+    _slots = list(params.outwards_slots)
     try:
-        _act = [s for s in params.outwards_slots
-                if s["from"] <= params.as_at <= s["to"]]
-        _actpct = float(_act[0]["pct"]) if _act else None
-    except Exception:  # noqa: BLE001
-        _actpct = None
+        _cur_slot = next(i for i, s in enumerate(_slots)
+                         if s["from"] <= params.as_at <= s["to"])
+    except (StopIteration, TypeError):  # noqa: BLE001
+        _cur_slot = len(_slots) - 1 if _slots else -1
+    _actpct = (float(_slots[_cur_slot]["pct"])
+               if 0 <= _cur_slot < len(_slots) else None)
     if _actpct is not None:
         prow("External Quota Share (current)", _actpct,
              "outwards RI cession active at as-at; the Summary 'Ext QS' column is "
              "SUM per layer of (exposure x slot pct by inception) — 20% only while "
              "every on-risk bird sits in this slot", pct=True)
-    for s in params.outwards_slots:
-        prow(f"  slot {s.get('name', s.get('id', ''))}", float(s["pct"]),
-             f"inception {s['from']} -> {s['to']}", pct=True, bold_val=False)
+    for i, s in enumerate(_slots):
+        _cur = (i == _cur_slot)
+        _here = r
+        prow(f"  slot {s.get('name', s.get('id', ''))}"
+             + (" — current" if _cur else ""), float(s["pct"]),
+             f"inception {s['from']} -> {s['to']}"
+             + ("" if _cur else "  (superseded — still applies to older-inception "
+                "on-risk layers)"), pct=True, bold_val=_cur)
+        if not _cur:
+            _collapse(_here)
 
     psection("IGR Quota Share")
     for ent, rate in raw["igr_qs"]["default"].items():
@@ -1170,20 +1189,38 @@ def _parameters(wb, params):
          "spacecraft IDs excluded from S3123", bold_val=False)
     # S3123 consortium time-factor schedule (XLOOKUP exact-or-next-smaller on
     # inception). s3123_qs = per_sc x cession x this factor; equity uses it too.
-    for _frm, _fac in getattr(params, "s3123_factors", []):
-        prow(f"S3123 consortium factor \u2014 inception \u2265 {_frm}", float(_fac),
-             "inwards QS time-factor by inception (12.5/30, 15/30, 10/30)",
-             pct=True, bold_val=False)
+    # Only the tier that applies to an inception at the as-at is shown; earlier
+    # tiers are collapsed (they still apply to older-inception on-risk layers).
+    _s3f = getattr(params, "s3123_factors", [])
+    _cur3 = max((i for i, (_frm, _) in enumerate(_s3f) if _frm <= params.as_at),
+                default=len(_s3f) - 1)
+    for i, (_frm, _fac) in enumerate(_s3f):
+        _cur = (i == _cur3)
+        _here = r
+        prow(f"S3123 consortium factor \u2014 inception \u2265 {_frm}"
+             + (" \u2014 current" if _cur else ""), float(_fac),
+             "inwards QS time-factor by inception (12.5/30, 15/30, 10/30)"
+             + ("" if _cur else "  (superseded)"), pct=True, bold_val=_cur)
+        if not _cur:
+            _collapse(_here)
 
     # S2126 \u2014 new consortium participant (2026-04-01, 5/30). Own syndicate RDS;
     # NO QS-to-IG, so it does not touch the IG book.
     _s2126 = getattr(params, "s2126_factors", []) or []
     if _s2126:
         psection("S2126 consortium (new 2026-04-01)")
-        for _frm, _fac in _s2126:
-            prow(f"S2126 consortium factor \u2014 inception \u2265 {_frm}", float(_fac),
-                 "sub-share S3123 released on 2026-04-01 (5/30); own RDS",
-                 pct=True, bold_val=False)
+        _cur2 = max((i for i, (_frm, _) in enumerate(_s2126)
+                     if _frm <= params.as_at), default=len(_s2126) - 1)
+        for i, (_frm, _fac) in enumerate(_s2126):
+            _cur = (i == _cur2)
+            _here = r
+            prow(f"S2126 consortium factor \u2014 inception \u2265 {_frm}"
+                 + (" \u2014 current" if _cur else ""), float(_fac),
+                 "sub-share S3123 released on 2026-04-01 (5/30); own RDS"
+                 + ("" if _cur else "  (pre-2026-04-01 placeholder \u2014 no S2126 share)"),
+                 pct=True, bold_val=_cur)
+            if not _cur:
+                _collapse(_here)
         _s2c = (params.raw.get("s2126_rds") or {}) if hasattr(params, "raw") else {}
         prow("S2126 QS to IG", float(_s2c.get("qs_to_ig", 0.0)),
              "no QS-to-IG agreement \u2014 net = gross (retains 100%); does NOT touch "
@@ -1204,10 +1241,6 @@ def _parameters(wb, params):
     psection("Risk Period Factor \u2014 bands (months to off-risk \u2192 factor)")
     for m, f in params.rpf_bands:
         prow(f"RPF: months \u2265 {m}", f, "time-decay factor", pct=True)
-
-    psection("External (outwards) RI slots")
-    for s in params.outwards_slots:
-        prow(s["name"], s["pct"], f"inception {s['from']} \u2192 {s['to']}", pct=True)
 
     psection("Pipeline exclusions")
     prow("exclude_placing_basis",
@@ -2885,6 +2918,76 @@ def _methodology(wb, params, changes):
         c.alignment = Alignment(wrap_text=True, vertical="top")
         ws.row_dimensions[r].height = 30
         r += 1
+    r += 1
+
+    # ---- Scenario formulas, per basis (IG · S3123 · S2126) ------------------ #
+    r = _section(ws, r, "Scenario formulas — IG · S3123 · S2126")
+    leg = ws.cell(row=r, column=2, value=(
+        "IG aggregates the FULL eligible portfolio (additive); the Lloyd's "
+        "syndicates apply the RDS SELECTIONS (top-N / worst group) at their "
+        "consortium share.   share₃₁₂₃ᵢ = per_scᵢ × f₃₁₂₃(inceptionᵢ) × eligᵢ ;   "
+        "share₂₁₂₆ᵢ = per_scᵢ × f₂₁₂₆(inceptionᵢ) × eligᵢ ;   "
+        "elig = is_consortium ∧ inceptionᵢ ≥ 2024-07-01.   "
+        "f₃₁₂₃ = 0.4167 / 0.500 / 0.333 by inception (<2026-01-01 / ≥2026-01-01 / "
+        "≥2026-04-01);  f₂₁₂₆ = 5/30 for inception ≥ 2026-04-01 else 0.   "
+        "RPFᵢ = time-to-off-risk factor;  DR(orbit) = {LEO 40%, MEO 10%, GEO-GSO 5%}.   "
+        "IG net cascade: gross − Ext QS − IGR QS(ent) − IGR XoL(ent); "
+        "S3123 net = gross × (1 − 20%) with excluded S/C {10590,13257,14294} × 1.00; "
+        "S2126 net = gross (no QS to IG)."))
+    leg.font = F_SUB
+    leg.alignment = Alignment(wrap_text=True, vertical="top")
+    ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=3)
+    ws.row_dimensions[r].height = 96
+    r += 2
+    r = _hdr(ws, r, 2, ["Basis", "Gross RDS  ·  Net RDS  (per-S/C loss shown inline)"],
+             [16, 108])
+    fmls = [
+        ("Proton Flare", [
+            ("IG", "GROSS(ent) = Σ (per_scᵢ × 5%) over ent's on-risk GEO-GSO   ·   "
+                   "NET = cascade (Ext QS → IGR QS → IGR XoL)"),
+            ("S3123", "GROSS = Σ (share₃₁₂₃ᵢ × 5%) over ALL on-risk GEO-GSO   ·   "
+                      "NET = gross × 0.80 (excluded S/C × 1.00)"),
+            ("S2126", "GROSS = Σ (share₂₁₂₆ᵢ × 5%) over ALL on-risk GEO-GSO   ·   "
+                      "NET = gross")]),
+        ("Space Weather", [
+            ("IG", "GROSS = Σ per_scᵢ over the worst bus-MANUFACTURER (all orbits, ×100%)   ·   "
+                   "NET = cascade"),
+            ("S3123", "GROSS = Σ top-4 (share₃₁₂₃ᵢ × 100%) within the worst Lloyd's BUS-TYPE   ·   "
+                      "NET = gross × 0.80 (excluded × 1.00)"),
+            ("S2126", "GROSS = Σ top-4 (share₂₁₂₆ᵢ × 100%) within the worst Lloyd's BUS-TYPE   ·   "
+                      "NET = gross")]),
+        ("Generic Defect", [
+            ("IG", "GROSS(ent) = Σ (per_scᵢ × 50% × RPFᵢ) over ent's GEO-GSO ∪ MEO (FULL set)   ·   "
+                   "NET = cascade"),
+            ("S3123", "GROSS = Σ top-10 by loss (share₃₁₂₃ᵢ × 50% × RPFᵢ) over GEO-GSO ∪ MEO   ·   "
+                      "NET = gross × 0.80 (excluded × 1.00)"),
+            ("S2126", "GROSS = Σ top-10 (share₂₁₂₆ᵢ × 50% × RPFᵢ) over GEO-GSO ∪ MEO   ·   "
+                      "NET = gross")]),
+        ("Space Debris", [
+            ("IG", "GROSS(ent) = Σ (per_scᵢ × DR(orbitᵢ)) over all on-risk orbits — NO RPF   ·   "
+                   "NET = cascade"),
+            ("S3123", "GROSS = Σ (share₃₁₂₃ᵢ × RPFᵢ × 100%) over the worst LEO altitude group   ·   "
+                      "NET = gross × 0.80 (excluded × 1.00)"),
+            ("S2126", "GROSS = Σ (share₂₁₂₆ᵢ × RPFᵢ × 100%) over the worst LEO altitude group   ·   "
+                      "NET = gross  (S2126 = $0: all LEO incepts pre-2026-04-01)")]),
+        ("Max Risk", [
+            ("IG", "GROSS = maxₖ Σ per_scᵢ within a single layer/spacecraft (largest single risk)   ·   "
+                   "NET = cascade"),
+            ("S3123", "GROSS = max over S/C of Σ share₃₁₂₃ᵢ   ·   NET = gross × 0.80  "
+                      "(engine value; not one of the four JJ RDS)"),
+            ("S2126", "GROSS = max over S/C of Σ share₂₁₂₆ᵢ   ·   NET = gross")]),
+    ]
+    for scen, rows_ in fmls:
+        hc = _cell(ws, r, 2, scen, bold=True)
+        _cell(ws, r, 3, "")
+        r += 1
+        for k, (b, f) in enumerate(rows_):
+            _cell(ws, r, 2, "   " + b, alt=k % 2 == 0)
+            c = _cell(ws, r, 3, f, alt=k % 2 == 0)
+            c.alignment = Alignment(wrap_text=True, vertical="top")
+            c.font = Font(name="Consolas", size=9, color=INK)
+            ws.row_dimensions[r].height = 26
+            r += 1
     r += 1
 
     r = _section(ws, r, "Population & exclusion logic")
