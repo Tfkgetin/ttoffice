@@ -2437,7 +2437,7 @@ def _book_movement(wb, changes):
         return df["spacecraft_id"].nunique() if df is not None and len(df) else 0
 
     r = _section(ws, 5, "At a glance")
-    r = _kv(ws, r, "New business", nb_x, money=True)
+    r = _kv(ws, r, "New to the book", nb_x, money=True)
     ws.cell(row=r - 1, column=4, value=f"{_nsc(new_biz)} spacecraft").font = F_SUB
     r = _kv(ws, r, "Renewals — current exposure", ren_cur, money=True)
     ws.cell(row=r - 1, column=4, value=f"{len(ren_sid)} spacecraft · was {ren_pri:,.0f} (Δ {ren_cur - ren_pri:+,.0f})").font = F_SUB
@@ -2498,8 +2498,20 @@ def _book_movement(wb, changes):
         _add_table(ws, tbl_name, 2, header_row, last_col, r - 1)
         return r + 1
 
-    r = _simple_table(r, f"New business — {new_biz['spacecraft_id'].nunique() if len(new_biz) else 0} "
-                         f"spacecraft (${nb_x:,.0f})", new_biz, GREEN, "BM_New")
+    r = _simple_table(r, f"New to the book — {new_biz['spacecraft_id'].nunique() if len(new_biz) else 0} "
+                         f"spacecraft (${nb_x:,.0f}) — layers not in the prior filing",
+                      new_biz, GREEN, "BM_New")
+    nbn = ws.cell(row=r, column=2, value=(
+        "New to the book = a layer present this quarter whose spacecraft was not "
+        "in the prior filing — it is NOT filtered by inception date. Inception can "
+        "pre-date this quarter: late-booked / backdated policies, multi-year "
+        "policies appearing for the first time, or a renewal whose old→new link "
+        "isn't captured (those sit here rather than in Renewals)."))
+    nbn.font = Font(name=_FB, size=9, italic=True, color=SOFT)
+    nbn.alignment = Alignment(wrap_text=True, vertical="top")
+    ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=11)
+    ws.row_dimensions[r].height = 42
+    r += 2
 
     # Renewals — per spacecraft, prior vs current (Δ conditionally formatted)
     r = _section(ws, r, f"Renewals — {len(ren_sid)} spacecraft "
