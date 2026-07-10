@@ -485,7 +485,8 @@ s3123_rds:
 # and IG equity correctly fall with the 0.333 factor and are NOT offset. S2126
 # gets its OWN syndicate RDS (same methodology as S3123), retaining 100%.
 # UW (John McGuinness): controlling-body id = 7; "very very small exposure".
-# OPEN: S2126 eligibility population / any separate exclusions — with UW.
+# UW-CONFIRMED: S2126 sits on the same consortium-eligible population as S3123,
+# and the S3123 "above-IG-line" exclusion list does NOT apply to S2126.
 # ----------------------------------------------------------------------------
 # S2126 consortium sub-share schedule (XLOOKUP exact-or-next-smaller on
 # inception): 0 before participation, 5/30 from 2026-04-01.
@@ -503,3 +504,24 @@ s2126_rds:
   max_risk: true
   scenarios: *s3123_scenarios                    # identical scenario set to S3123
   controlling_body_id: 7                          # UW reference (Controlling_Bodies_t)
+
+  # Polished Lloyd's RDS Summary tab for S2126 (mirrors S3123's last tab).
+  lloyds_summary:
+    enabled: true
+    risk_appetite_usd: 50000000            # assumed same as S3123 — confirm S2126's own with UW
+    qoq_note: >-
+      New consortium participant: S2126 took the 5/30 (0.167) share that S3123
+      released on 2026-04-01. Its own RDS is computed on the same population and
+      methodology as S3123 but at the 5/30 line and with NO QS to IG (net =
+      gross, retains 100%). No prior quarter — S2126 did not participate before
+      2026-04-01 — so there is no Q-on-Q column. Very small exposure.
+    change_narrative:
+      "Proton Flare": >-
+        5% of GEO on the S2126 5/30 share; new participation from 2026-04-01,
+        no prior. Net = gross (no QS to IG).
+      "Space Weather": >-
+        Worst single bus type (top-4 aggregate) at the 5/30 share. Net = gross.
+      "Generic Defect": >-
+        Top-10 GEO/MEO losses (RPF-adjusted, 50%) at the 5/30 share. Net = gross.
+      "Space Debris": >-
+        Worst LEO altitude group (RPF-adjusted) at the 5/30 share. Net = gross.
