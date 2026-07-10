@@ -66,11 +66,12 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
         per_layer = per_layer.join(
             _s3c.s3123_layer_contribs(per_layer, params, cfg_key="s2126_rds",
                                       factor_col="s2126_factor", prefix="s2126"))
-    # Per-layer FIHL contribution to the SELECTION scenarios (Space Weather,
-    # Max Risk) so their ex-add-on gross on the S3123 & Equity tab is a live SUM,
-    # not a baked engine value (the additive scenarios already are).
+    # Per-layer contribution to the SELECTION scenarios (Space Weather, Max
+    # Risk) for every entity, so their gross / Ext-QS / IGR on the Summary and
+    # S3123 & Equity tab are live SUM / SUMPRODUCT, not baked engine values (the
+    # additive scenarios already are).
     from . import netting as _net_mod
-    per_layer = per_layer.join(_net_mod.fihl_selection_contribs(per_layer, params))
+    per_layer = per_layer.join(_net_mod.selection_contribs(per_layer, params))
 
     def _pl_sum_refs(wbk, prefix):
         """{scenario: {'g': =SUM(range), 'n': =SUM(range)}} over Per Layer.

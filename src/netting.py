@@ -222,25 +222,34 @@ def summary_grid(df: pd.DataFrame, p) -> pd.DataFrame:
     return entity_scenario_netting(df, p)
 
 
-def fihl_selection_contribs(df: pd.DataFrame, p) -> pd.DataFrame:
-    """Per-layer FIHL contribution to the SELECTION scenarios (Space Weather,
-    Max Risk), with the group selection baked in — so the 'S3123 & Equity (IG)'
-    tab can render the FIHL ex-add-on gross as a live =SUM(Per Layer) for these
-    scenarios too (the additive ones already have pf/gd/sd_fihl).
+def selection_contribs(df: pd.DataFrame, p) -> pd.DataFrame:
+    """Per-layer contribution to the SELECTION scenarios (Space Weather, Max
+    Risk) for every entity perspective, selection baked in — so the Summary and
+    the S3123 & Equity (IG) tab can render these scenarios' gross / Ext-QS / IGR
+    as live SUM / SUMPRODUCT over Per Layer (the additive scenarios already have
+    pf/gd/sd_{fihl,ful,fiid}).
 
-      sw_fihl = m_SpaceWeather × per_sc  (per_sc over the worst-manufacturer
-                on-risk layers, all orbits)
-      mr_fihl = m_MaxRisk × per_sc       (per_sc over the largest-spacecraft
-                on-risk layers)
+      sw_fihl / mr_fihl : m(group) × per_sc  — worst-manufacturer / largest-bird
+                          on the GROUP perspective (matches _fihl_fibl gross).
+      sw_ful / sw_fiid  : m(entity) × (entity==ent) × per_sc — each OPERATING
+      mr_ful / mr_fiid    entity ranks its OWN worst pick (matches _net gross,
+                          which weights m × entity-mask × per_sc).
 
-    m is the GROUP (entity=None) multiplier, exactly as _fihl_fibl uses it, so
-    SUM(sw_fihl) reproduces the grid's FIHL Space-Weather gross to the cent and
-    SUMPRODUCT(sw_fihl, s3123_qs/per_sc) reproduces the S3123-QS add-back
-    ((m × s3123_qs).sum()). Same for Max Risk."""
-    m = scenario_multipliers(df, p, entity=None)
+    Because m is the identical multiplier the grid uses, SUM(sw_fihl) reproduces
+    the FIHL Space-Weather gross and SUMPRODUCT(sw_fihl, s3123_qs/per_sc) the
+    S3123-QS add-back, to the cent; likewise SUMPRODUCT(sw_ful, ext_qs/per_sc)
+    reproduces FUL's Space-Weather Ext-QS, etc."""
     out = pd.DataFrame(index=df.index)
-    if "Space Weather" in m:
-        out["sw_fihl"] = (m["Space Weather"] * df["per_sc"]).astype(float)
-    if "Max Risk" in m:
-        out["mr_fihl"] = (m["Max Risk"] * df["per_sc"]).astype(float)
+    mg = scenario_multipliers(df, p, entity=None)   # group / FIHL perspective
+    if "Space Weather" in mg:
+        out["sw_fihl"] = (mg["Space Weather"] * df["per_sc"]).astype(float)
+    if "Max Risk" in mg:
+        out["mr_fihl"] = (mg["Max Risk"] * df["per_sc"]).astype(float)
+    for ent, slug in (("FUL", "ful"), ("FIID", "fiid")):
+        me = scenario_multipliers(df, p, entity=ent)  # entity's own worst pick
+        emask = df["entity"].eq(ent).astype(float)
+        if "Space Weather" in me:
+            out[f"sw_{slug}"] = (me["Space Weather"] * emask * df["per_sc"]).astype(float)
+        if "Max Risk" in me:
+            out[f"mr_{slug}"] = (me["Max Risk"] * emask * df["per_sc"]).astype(float)
     return out
