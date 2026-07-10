@@ -1706,11 +1706,15 @@ def _change_narrative(wb, changes, per_layer, mr, sw, params):
         "renews post-April those add-backs fall ~1/3 on the renewed birds — a driver "
         "of the combined and receiver movement that is INDEPENDENT of the gross "
         "exposure change. External QS (20%) and the IGR QS rates are unchanged, so "
-        "operating-entity (FUL/FIID) net tracks gross."))
+        "operating-entity (FUL/FIID) net tracks gross. The 5/30 that S3123 released "
+        "went to a NEW consortium participant, Syndicate 2126, which has NO QS-to-IG "
+        "agreement — so the S3123 add-back drop is NOT offset on the IG side. S2126 "
+        "is reported separately on its own 'S2126 RDS Summary' tab (net = gross, "
+        "very small exposure) and does not touch the IG numbers."))
     _cnote.font = Font(name=_FB, size=9, italic=True, color=SOFT)
     _cnote.alignment = Alignment(wrap_text=True, vertical="top")
     ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=12)
-    ws.row_dimensions[r].height = 56
+    ws.row_dimensions[r].height = 84
     r += 2
 
     # Standing commentary the writer edits (seeded from the treaty terms) -------
