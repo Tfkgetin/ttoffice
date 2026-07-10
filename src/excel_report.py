@@ -329,7 +329,14 @@ _PL_KEEP = ["program_id", "layer_id", "entity", "mapping_code", "spacecraft_id",
             # backbone the Summary & S3123 tabs SUMPRODUCT against so those
             # aggregates are live formulas, not baked numbers (additive scenarios).
             "pf_ful", "pf_fiid", "gd_ful", "gd_fiid", "sd_ful", "sd_fiid",
-            "ext_qs_pp", "igr_ceded_pp", "s3123_qs_pp", "equity_pp"]
+            "ext_qs_pp", "igr_ceded_pp", "s3123_qs_pp", "equity_pp",
+            # per-layer S3123 / S2126 syndicate contributions (gross + net) per
+            # RDS — selection baked in; the Lloyd's Summary tabs SUM these so the
+            # syndicate Gross/Net are live formulas, not baked numbers.
+            "s3123_pf_g", "s3123_pf_n", "s3123_sw_g", "s3123_sw_n",
+            "s3123_gd_g", "s3123_gd_n", "s3123_sd_g", "s3123_sd_n",
+            "s2126_pf_g", "s2126_pf_n", "s2126_sw_g", "s2126_sw_n",
+            "s2126_gd_g", "s2126_gd_n", "s2126_sd_g", "s2126_sd_n"]
 
 # additive scenarios only — selections (Space Weather / Max Risk) are not sums
 _SP_SCEN = {"Proton Flare": "pf", "Generic Defect": "gd", "Space Debris": "sd"}

@@ -158,13 +158,16 @@ def _net(gross_by_line: pd.Series, df: pd.DataFrame, cfg: dict) -> float:
 
 
 # --------------------------------------------------------------------------- #
-# the four scenarios — each returns (gross, net, detail, picked-line index)
+# the four scenarios — each returns (gross, net, detail, per-line gross Series)
+# The 4th element is the per-layer GROSS contribution over the scenario's
+# picked set (empty elsewhere); s3123_layer_contribs turns it into Per-Layer
+# columns so the Lloyd's Summary can write Gross/Net as live =SUM() formulas.
 # --------------------------------------------------------------------------- #
 def _proton(df, share, cfg):
     s = cfg["pf"]
     scope = df["orbit"].isin(s["orbits"]) & (df["on_risk_flag"] == 1)
     line = (share * s["loss"])[scope]
-    return line.sum(), _net(line, df, cfg), "All GEO", line.index
+    return line.sum(), _net(line, df, cfg), "All GEO", line
 
 
 def _space_weather(df, share, cfg):
@@ -178,7 +181,7 @@ def _space_weather(df, share, cfg):
     bt = df["lloyds_bus_type"]
     valid = flag & bt.notna() & ~bt.isin(["", "None"])
     if not valid.any():
-        return 0.0, 0.0, None, df.index[:0]
+        return 0.0, 0.0, None, pd.Series(dtype=float)
     n = s.get("top_n", 4)
     loss = s.get("loss", 1.0)
     best = None
@@ -188,7 +191,7 @@ def _space_weather(df, share, cfg):
         if best is None or tot > best[0]:
             best = (tot, top.index, grp)
     line = share.loc[best[1]] * loss
-    return line.sum(), _net(line, df, cfg), best[2], line.index
+    return line.sum(), _net(line, df, cfg), best[2], line
 
 
 def _generic_defect(df, share, cfg):
@@ -204,15 +207,15 @@ def _generic_defect(df, share, cfg):
         by = loss[scope].groupby(df.loc[scope, "bus_manufacturer"]).sum()
         by = by[by > 0]
         if not len(by):
-            return 0.0, 0.0, None, df.index[:0]
+            return 0.0, 0.0, None, pd.Series(dtype=float)
         worst = by.idxmax()
         idx = df.index[scope & df["bus_manufacturer"].eq(worst)]
         return (loss[idx].sum(), _net(loss[idx], df, cfg),
-                f"Largest manufacturer: {worst}", idx)
+                f"Largest manufacturer: {worst}", loss[idx])
     # default: top-N individual risks
     cand = loss[scope].sort_values(ascending=False)
     top = cand.iloc[: s.get("top_n", 10)]
-    return top.sum(), _net(top, df, cfg), f"Top {s.get('top_n', 10)} risks", top.index
+    return top.sum(), _net(top, df, cfg), f"Top {s.get('top_n', 10)} risks", top
 
 
 def _space_debris(df, share, cfg):
@@ -238,9 +241,9 @@ def _space_debris(df, share, cfg):
                 best = (tot, df.index[m], grp["name"])
         if best is not None and len(best[1]):
             idx = best[1]
-            return line[idx].sum(), _net(line[idx], df, cfg), f"LEO {best[2]}", idx
+            return line[idx].sum(), _net(line[idx], df, cfg), f"LEO {best[2]}", line[idx]
     # fallback: all LEO (no altitude / no groups configured)
-    return line[leo].sum(), _net(line[leo], df, cfg), "LEO (all — no altitude)", df.index[leo]
+    return line[leo].sum(), _net(line[leo], df, cfg), "LEO (all — no altitude)", line[leo]
 
 
 def _max_risk(df, share, cfg):
@@ -248,10 +251,10 @@ def _max_risk(df, share, cfg):
     g = share[flag].groupby(df.loc[flag, "spacecraft_name"]).sum()
     g = g[g > 0]                      # FIX(recon 2026Q1): ignore zero-share names
     if not len(g):
-        return 0.0, 0.0, None, df.index[:0]
+        return 0.0, 0.0, None, pd.Series(dtype=float)
     biggest = g.idxmax()
     line = share[flag & df["spacecraft_name"].eq(biggest)]
-    return line.sum(), _net(line, df, cfg), biggest, line.index
+    return line.sum(), _net(line, df, cfg), biggest, line
 
 
 _CALC = {
@@ -259,6 +262,50 @@ _CALC = {
     "Generic Defect": _generic_defect, "Space Debris": _space_debris,
     "Max Risk": _max_risk,
 }
+
+# scenario -> short slug for Per Layer contribution column names. Only the four
+# JJ RDS (not Max Risk) feed the Lloyd's Summary, so only these get columns.
+SCEN_SLUG = {"Proton Flare": "pf", "Space Weather": "sw",
+             "Generic Defect": "gd", "Space Debris": "sd"}
+
+
+def s3123_layer_contribs(df: pd.DataFrame, p, cfg_key: str = "s3123_rds",
+                         factor_col: str = "s3123_factor",
+                         prefix: str = "s3123") -> pd.DataFrame:
+    """Per-layer GROSS and NET contribution to each syndicate RDS, indexed like
+    `df`. The scenario SELECTION is baked in: a layer outside a scenario's
+    picked set is 0. Summing a column reproduces s3123_grid's gross/net for
+    that scenario, so the Lloyd's Summary can render Gross/Net as live
+    =SUM(Per Layer) formulas (the same backbone the IG Summary uses).
+
+    Columns: {prefix}_{slug}_g (gross) and {prefix}_{slug}_n (net) for each of
+    the four JJ scenarios (pf/sw/gd/sd).
+
+    Net = gross per line, less the QS cession to IG (excluded spacecraft retain
+    100%). This decomposition is exact ONLY while there is no active Agg XoL
+    (a scenario-aggregate structure can't be split per line); when one is
+    active the net columns are omitted and the Summary falls back to the
+    engine's netted value.
+    """
+    if "lloyds_bus_type" not in df.columns:
+        df = df.copy()
+        df["lloyds_bus_type"] = None
+    cfg = _cfg(p, cfg_key)
+    share = s3123_share(df, cfg, factor_col)
+    qs = cfg["qs_to_ig"]
+    excl = cfg["qs_excluded"]
+    net_decomposable = not cfg["agg_xol"]
+    cede = df["spacecraft_id"].map(lambda s: 0.0 if s in excl else qs).astype(float)
+    out = pd.DataFrame(index=df.index)
+    for scen, slug in SCEN_SLUG.items():
+        _, _, _, line = _CALC[scen](df, share, cfg)  # per-line gross Series
+        g = pd.Series(0.0, index=df.index)
+        if len(line):
+            g.loc[line.index] = line.astype(float)
+        out[f"{prefix}_{slug}_g"] = g
+        if net_decomposable:
+            out[f"{prefix}_{slug}_n"] = g * (1.0 - cede)
+    return out
 
 
 def s3123_grid(df: pd.DataFrame, p, cfg_key: str = "s3123_rds",
