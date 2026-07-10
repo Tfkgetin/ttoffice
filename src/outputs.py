@@ -47,6 +47,30 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
         s3grid = s3123_mod.s3123_grid(per_layer, params)
         s3grid.to_csv(out / "s3123_grid.csv", index=False)
 
+    # Per-layer syndicate contribution columns (gross + net per RDS) so the
+    # Lloyd's Summary tabs render Gross/Net as live =SUM(Per Layer) formulas.
+    # Attached BEFORE the Per Layer sheet is written; selection is baked in.
+    from . import s3123 as _s3c
+    if (params.raw.get("s3123_rds") or {}).get("enabled"):
+        per_layer = per_layer.join(
+            _s3c.s3123_layer_contribs(per_layer, params, prefix="s3123"))
+    if (params.raw.get("s2126_rds") or {}).get("enabled"):
+        per_layer = per_layer.join(
+            _s3c.s3123_layer_contribs(per_layer, params, cfg_key="s2126_rds",
+                                      factor_col="s2126_factor", prefix="s2126"))
+
+    def _pl_sum_refs(prefix):
+        """{scenario: {'g': =SUM(range), 'n': =SUM(range)}} over Per Layer."""
+        colmap, _ = excel_report._pl_map(per_layer)
+        n = len(per_layer)
+        refs = {}
+        for scen, slug in _s3c.SCEN_SLUG.items():
+            gr = excel_report._pl_range(colmap, n, f"{prefix}_{slug}_g")
+            nr = excel_report._pl_range(colmap, n, f"{prefix}_{slug}_n")
+            refs[scen] = {"g": f"=SUM({gr})" if gr else None,
+                          "n": f"=SUM({nr})" if nr else None}
+        return refs
+
     chg = changes_mod.compute(per_layer, summary, prior, cur_s3=s3grid)
 
     # ------------------------------------------------------------------ #
@@ -159,7 +183,8 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
             _wbl, s3grid, as_at=str(params.as_at), sw_view=sw_view,
             risk_appetite=appetite, prior=s3_prior,
             qoq_note=lcfg.get("qoq_note"), params=params,
-            change_narrative=lcfg.get("change_narrative"))
+            change_narrative=lcfg.get("change_narrative"),
+            pl_refs=_pl_sum_refs("s3123"))
         # The computed 'S3123 RDS' tab is superseded by the Lloyd's Summary —
         # keep it in the file (audit) but hide it from view.
         if "S3123 RDS" in _wbl.sheetnames:
@@ -203,7 +228,8 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
                 prior=None, qoq_note=l2.get("qoq_note"), params=params,
                 change_narrative=l2.get("change_narrative"),
                 sheet_name="S2126 RDS Summary", syndicate_no="2126",
-                cfg_key="s2126_rds", factors=params.s2126_factors)
+                cfg_key="s2126_rds", factors=params.s2126_factors,
+                pl_refs=_pl_sum_refs("s2126"))
             # raw computed 'S2126 RDS' tab superseded by the summary — hide it
             if "S2126 RDS" in _wb3.sheetnames:
                 _wb3["S2126 RDS"].sheet_state = "hidden"

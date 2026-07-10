@@ -106,7 +106,7 @@ def write_lloyds_rds_summary(wb, grid, as_at="", sw_view=None,
                              risk_appetite=None, prior=None, qoq_note=None,
                              params=None, change_narrative=None,
                              sheet_name="Lloyds RDS Summary", syndicate_no="3123",
-                             cfg_key="s3123_rds", factors=None):
+                             cfg_key="s3123_rds", factors=None, pl_refs=None):
     """Render the Lloyd's (S3123) RDS summary tab from the pipeline's COMPUTED
     grid (gross + net) — it does not depend on the Lloyd's SQL views, which are
     currently unreadable (a varchar->int CAST in the view dies on 'BJ-3C 01').
@@ -116,6 +116,10 @@ def write_lloyds_rds_summary(wb, grid, as_at="", sw_view=None,
                       the bus-type block; None -> a banner explains it's blocked.
       risk_appetite : optional USD threshold; RDS gross above it flags a breach.
       prior         : optional {scenario: gross} for a Q-on-Q change column.
+      pl_refs       : optional {scenario: {'g': '=SUM(..)', 'n': '=SUM(..)'}}
+                      live Per-Layer SUM formulas for Gross/Net; when present
+                      the syndicate Gross/Net render as formulas, not baked
+                      engine numbers (Δ columns stay live too).
     """
     if sheet_name in wb.sheetnames:
         del wb[sheet_name]
@@ -192,15 +196,20 @@ def write_lloyds_rds_summary(wb, grid, as_at="", sw_view=None,
                 cc.alignment = Alignment(horizontal="right")
                 return cc
 
-            # Gross (D) — engine value; selections keep their computed gross.
+            # Gross (D) / Net (E) — prefer live =SUM(Per Layer) formulas
+            # (selection baked into the per-layer columns); fall back to the
+            # engine value, then to '=D' net for no-QS syndicates.
+            pref = (pl_refs or {}).get(scen) or {}
             if unavail:
                 _num(4, "n/a", AMBER)
+            elif pref.get("g"):
+                _num(4, pref["g"])
             else:
                 _num(4, gross)
-            # Net (E) — for no-QS syndicates net == gross, written as a live
-            # formula (=D{r}); otherwise the engine's netted value.
             if unavail:
                 _num(5, "n/a", AMBER)
+            elif pref.get("n"):
+                _num(5, pref["n"])
             elif _qs == 0:
                 _num(5, f"=D{r}")
             else:
