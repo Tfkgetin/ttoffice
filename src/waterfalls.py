@@ -10,9 +10,11 @@ scenario / entity / orbit / manufacturer, so this builds:
       (the 1:1 AW analogue — every step links to the Portfolio bridge cells)
     • in-force composition by entity / orbit / manufacturer / scenario
       (each value is a live SUMIFS against Per Layer — nothing hard-coded)
-    • per-slice opening→closing bridges when a prior per-layer snapshot exists
-      (these alone are computed in Python — the prior per-layer set is not a
-      workbook tab, so there is no cell to link to)
+    • per-slice opening→closing bridges when a prior per-layer snapshot exists.
+      Closing is a live SUMIFS on Per Layer; the three prior-derived movements
+      (+New / −Run-off / ±Reval — the prior snapshot is the one input not on a
+      current tab) are consolidated in a labelled anchor block, and every bridge
+      cell references it (Opening is derived), so no bridge cell is baked.
 
   WF · Loss Movement
     • all-scenario levels (current vs prior net) with the worst-case scenario flagged
@@ -433,7 +435,7 @@ def _wf_exposure(wb, per_layer, changes, params, ref, prior_layers=None):
 
     if prior_layers is not None and len(prior_layers):
         r = _section(ws, r, "Movement by slice (opening → closing)")
-        _slice_bridges(ws, r, per_layer, prior_layers)
+        _slice_bridges(ws, r, per_layer, prior_layers, first, last)
     else:
         ws.cell(row=r, column=2, value=(
             "Per-slice opening→closing bridges (by entity / orbit / manufacturer) "
@@ -442,40 +444,78 @@ def _wf_exposure(wb, per_layer, changes, params, ref, prior_layers=None):
             ).font = F_SUB
 
 
-def _slice_bridges(ws, r, per_layer, prior_layers,
+def _slice_bridges(ws, r, per_layer, prior_layers, first, last,
                    dims=("entity", "orbit")):
     # Manufacturer slice-bridges dropped (user 2026Q2): too many thin per-maker
     # waterfalls; manufacturer concentration is still on the 'By bus manufacturer'
     # composition panel above. Entity / orbit bridges are retained.
+    #
+    # The prior per-layer snapshot is the ONE input not on a current workbook
+    # tab, so the three prior-derived movements (+New, −Run-off, ±Reval) for each
+    # slice are consolidated ONCE in a labelled anchor block; Closing is a live
+    # SUMIFS on Per Layer and Opening is derived (= Closing − New − Run-off −
+    # Reval). Every slice bridge below then REFERENCES the anchor cells — nothing
+    # in a bridge is a baked number (mirrors how the portfolio bridge links to
+    # Portfolio!).
     cur = per_layer.copy(); prior = prior_layers.copy()
     if "layer_key" in cur:
         cur["layer_key"] = cur["layer_key"].astype(str)
     if "layer_key" in prior:
         prior["layer_key"] = prior["layer_key"].astype(str)
+    slices = []
     for dim in dims:
         if dim not in cur or dim not in prior:
             continue
-        members = (cur.groupby(dim)["per_sc"].sum()
-                   .sort_values(ascending=False).head(6).index.tolist())
-        for m in members:
-            c = cur[cur[dim] == m]; p = prior[prior[dim] == m]
-            ck, pk = set(c["layer_key"]), set(p["layer_key"])
-            new = float(c[c["layer_key"].isin(ck - pk)]["per_sc"].sum())
-            dropped = float(p[p["layer_key"].isin(pk - ck)]["per_sc"].sum())
-            common = ck & pk
-            cc = c[c["layer_key"].isin(common)].set_index("layer_key")["per_sc"]
-            pp = p[p["layer_key"].isin(common)].set_index("layer_key")["per_sc"]
-            move = float((cc - pp).sum())
-            closing = float(c["per_sc"].sum())
-            opening = closing - new + dropped - move
-            steps = [("Opening", "prior", opening, "total"),
-                     ("+ New", None, new, "auto"),
-                     ("− Run-off", None, -dropped, "auto"),
-                     ("± Reval", None, move, "auto"),
-                     ("Closing", "current", None, "total")]
-            label = dim.replace("bus_manufacturer", "manufacturer")
-            r = _waterfall_block(ws, r, 2, f"{label}: {m}", steps,
-                                 reported_close=closing, chart_h=6.4, chart_w=13) + 1
+        crit = PL_ENT if dim == "entity" else PL_ORB
+        for m in (cur.groupby(dim)["per_sc"].sum()
+                  .sort_values(ascending=False).head(6).index.tolist()):
+            slices.append((dim, m, crit))
+
+    # ---- anchor block: the prior-derived movements, referenced by the bridges ----
+    r = _section(ws, r, "Prior-quarter movement anchors  (prior per-layer "
+                 "snapshot — the one input not on a current tab; bridges below "
+                 "reference these cells, Closing is a live SUMIFS on Per Layer)")
+    hdr = r
+    for j, h in enumerate(["Slice", "Closing (live SUMIFS)", "+ New",
+                           "− Run-off", "± Reval", "Opening (= C−D−E−F)"]):
+        cc = ws.cell(row=hdr, column=2 + j, value=h)
+        cc.font = F_HDR; cc.fill = FILL_HDR
+        cc.alignment = Alignment(horizontal="left" if j == 0 else "center")
+    r += 1
+    anchors = {}
+    for dim, m, crit in slices:
+        c = cur[cur[dim] == m]; p = prior[prior[dim] == m]
+        ck, pk = set(c["layer_key"]), set(p["layer_key"])
+        new = float(c[c["layer_key"].isin(ck - pk)]["per_sc"].sum())
+        dropped = float(p[p["layer_key"].isin(pk - ck)]["per_sc"].sum())
+        common = ck & pk
+        cc = c[c["layer_key"].isin(common)].set_index("layer_key")["per_sc"]
+        pp = p[p["layer_key"].isin(common)].set_index("layer_key")["per_sc"]
+        move = float((cc - pp).sum())
+        label = dim.replace("bus_manufacturer", "manufacturer")
+        ws.cell(row=r, column=2, value=f"{label}: {m}").font = F_CELL
+        _fcell(ws, r, 3, _sumifs(crit, m, first, last))     # C  closing (live)
+        _fcell(ws, r, 4, new)                                # D  + new
+        _fcell(ws, r, 5, -dropped)                           # E  − run-off
+        _fcell(ws, r, 6, move)                               # F  ± reval
+        _fcell(ws, r, 7, f"=C{r}-D{r}-E{r}-F{r}")            # G  opening (derived)
+        anchors[(dim, m)] = dict(closing=f"C{r}", new=f"D{r}", runoff=f"E{r}",
+                                 reval=f"F{r}", opening=f"G{r}")
+        r += 1
+    r += 2
+
+    # ---- the bridges: every source cell references the anchor block above ----
+    for dim, m, crit in slices:
+        a = anchors[(dim, m)]
+        steps = [("Opening", "prior", f"={a['opening']}", "total"),
+                 ("+ New", None, f"={a['new']}", "auto"),
+                 ("− Run-off", None, f"={a['runoff']}", "auto"),
+                 ("± Reval", None, f"={a['reval']}", "auto"),
+                 ("Closing", "current", None, "total")]
+        label = dim.replace("bus_manufacturer", "manufacturer")
+        r = _waterfall_block(ws, r, 2, f"{label}: {m}", steps,
+                             reported_close=f"={a['closing']}",
+                             chart_h=6.4, chart_w=13) + 1
     return r
 
 
