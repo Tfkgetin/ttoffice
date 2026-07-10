@@ -329,6 +329,10 @@ _PL_KEEP = ["program_id", "layer_id", "entity", "mapping_code", "spacecraft_id",
             # backbone the Summary & S3123 tabs SUMPRODUCT against so those
             # aggregates are live formulas, not baked numbers (additive scenarios).
             "pf_ful", "pf_fiid", "gd_ful", "gd_fiid", "sd_ful", "sd_fiid",
+            # FIHL contribution to the SELECTION scenarios (worst-manufacturer
+            # Space Weather / largest-spacecraft Max Risk) — selection baked in,
+            # so their ex-add-on gross on the S3123 & Equity tab is a live SUM.
+            "sw_fihl", "mr_fihl",
             "ext_qs_pp", "igr_ceded_pp", "s3123_qs_pp", "equity_pp",
             # per-layer S3123 / S2126 syndicate contributions per RDS. The _g
             # (gross) and _n (net) cells are LIVE formulas built from per_sc x
@@ -349,6 +353,12 @@ _PL_KEEP = ["program_id", "layer_id", "entity", "mapping_code", "spacecraft_id",
 # additive scenarios only — selections (Space Weather / Max Risk) are not sums
 _SP_SCEN = {"Proton Flare": "pf", "Generic Defect": "gd", "Space Debris": "sd"}
 _SP_ENT = {"FIHL": "fihl", "FUL": "ful", "FIID": "fiid"}
+# per-layer FIHL contribution column for EVERY scenario (additive + selection),
+# so the FIHL ex-add-on gross / S3123-QS / equity on the S3123 & Equity tab are
+# all live SUM / SUMPRODUCT over Per Layer, not baked engine values.
+_FIHL_CONTRIB = {"Proton Flare": "pf_fihl", "Generic Defect": "gd_fihl",
+                 "Space Debris": "sd_fihl", "Space Weather": "sw_fihl",
+                 "Max Risk": "mr_fihl"}
 
 # Human-readable "primary" Per Layer columns kept visible; everything else is
 # computation backbone (scenario contributions, per-$ rates, selection/elig
@@ -3696,12 +3706,13 @@ def _s3123_ig_addons(wb, grid, params, per_layer=None):
                          "inception: <2026-01-01 / ≥2026-01-01 / ≥2026-04-01), on "
                          "S3123-eligible layers only (is-consortium AND inception in "
                          "2024-07-01…2026-12-31 AND not excluded). IG equity = per-S/C "
-                         "× equity % (by inception year) × the same factor. For the "
-                         "additive scenarios these cells are LIVE — SUMPRODUCT over "
-                         "Per Layer (contribution × per-layer rate) — so they tie to "
-                         "the engine to the cent. Space Weather / Max Risk are "
-                         "selections (worst manufacturer / single bird), shown as "
-                         "engine values; reconcile on their own tabs."),
+                         "× equity % (by inception year) × the same factor. ALL "
+                         "scenarios are LIVE here — SUM / SUMPRODUCT over Per Layer "
+                         "(FIHL contribution × per-layer rate) — so they tie to the "
+                         "engine to the cent. The selection scenarios (Space Weather "
+                         "= worst manufacturer, Max Risk = single bird) carry their "
+                         "pick in the per-layer sw_fihl / mr_fihl columns, so those "
+                         "SUMs are live too."),
     ]
     r = 5
     for who, txt in notes:
@@ -3735,11 +3746,11 @@ def _s3123_ig_addons(wb, grid, params, per_layer=None):
     for i, scen in enumerate(scens):
         row = fihl.loc[scen]
         _cell(ws, r, 2, scen, alt=i % 2)
-        contrib = f"{_SP_SCEN[scen]}_fihl" if scen in _SP_SCEN else None
+        contrib = _FIHL_CONTRIB.get(scen)
         gr_rng = _pl_range(_plc, _plN, contrib) if contrib else None
         s3f = _sumproduct(_plc, _plN, contrib, "s3123_qs_pp") if contrib else None
         eqf = _sumproduct(_plc, _plN, contrib, "equity_pp") if contrib else None
-        if gr_rng and s3f and eqf:      # additive scenario -> live
+        if gr_rng and s3f and eqf:      # live SUM/SUMPRODUCT over Per Layer
             cC = _cell(ws, r, 3, f"=SUM({gr_rng})", alt=i % 2, money=True)
             _note(cC, "LIVE: SUM of the per-layer FIHL contribution for this scenario "
                       "on Per Layer. Reconciles to the engine to the cent.")
