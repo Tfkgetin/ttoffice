@@ -110,6 +110,11 @@ def _ensure_s3123_factors(pw):
         pw.cell(row=rr, column=4,
                 value="inwards QS time factor (consortium schedule)")
         _style((rr, 4), (25, 4))
+    # These rows are formula anchors that duplicate the visible S3123 schedule
+    # above; collapse them (hidden but kept for the references / as record).
+    for rr in (base, base + 1, base + 2, base + 3):
+        pw.row_dimensions[rr].outlineLevel = 1
+        pw.row_dimensions[rr].hidden = True
     return f"Parameters!$C${base + 1}", f"Parameters!$C${base + 2}"
 
 
@@ -155,6 +160,11 @@ def _ensure_equity_table(pw):
                 value="FIHL equity participation by underwriting year")
         _style((rr, 4), (25, 4))
     r1 = r0 + len(rates) - 1
+    # Collapse the superseded underwriting years (keep the most recent visible);
+    # SUMIFS still spans the hidden rows, so the equity build-up is unaffected.
+    for rr in range(r0, r1):
+        pw.row_dimensions[rr].outlineLevel = 1
+        pw.row_dimensions[rr].hidden = True
     return f"Parameters!$B${r0}:$B${r1}", f"Parameters!$C${r0}:$C${r1}"
 
 
