@@ -434,8 +434,8 @@ def _wf_exposure(wb, per_layer, changes, params, ref, prior_layers=None):
         ("Max Risk", allp, base_v)], total) + 1
 
     if prior_layers is not None and len(prior_layers):
-        r = _section(ws, r, "Movement by slice (opening → closing)")
-        _slice_bridges(ws, r, per_layer, prior_layers, first, last)
+        r = _section(ws, r, "Movement by slice (opening → closing) — renewal-aware")
+        _slice_bridges(ws, r, per_layer, prior_layers, changes, first, last)
     else:
         ws.cell(row=r, column=2, value=(
             "Per-slice opening→closing bridges (by entity / orbit / manufacturer) "
@@ -444,78 +444,118 @@ def _wf_exposure(wb, per_layer, changes, params, ref, prior_layers=None):
             ).font = F_SUB
 
 
-def _slice_bridges(ws, r, per_layer, prior_layers, first, last,
+MD = "'WF · Movement Data'"          # hidden helper tab (see _write_movement_data)
+MD_SIDE, MD_ENT, MD_ORB, MD_CLS, MD_PSC = "A", "B", "C", "D", "E"
+
+
+def _write_movement_data(wb, per_layer, prior_layers, changes):
+    """Hidden helper tab: every CURRENT and PRIOR layer tagged with a renewal-
+    AWARE movement class, so the slice bridges compute each movement as a live
+    SUMIFS — renewal-aware, with NO baked numbers.
+
+      current layer -> new / renewed / continuing   (renewed = a renewal of a
+                       prior spacecraft, even onto a new programme id)
+      prior   layer -> lapsed / renewed / continuing
+
+    Classes come from renewals.split_movement (spacecraft-level pairing), so a
+    fleet that renewed onto a new programme id lands in 'renewed', NOT in both
+    run-off and new. Returns (first_row, last_row) or None."""
+    from . import renewals as _rnw
+    lyr = (changes or {}).get("layers", {}) or {}
+    sp = _rnw.split_movement(lyr.get("new"), lyr.get("dropped"))
+
+    def _keys(fr):
+        return (set(fr["layer_key"].astype(str))
+                if fr is not None and len(fr) and "layer_key" in fr.columns else set())
+    new_k, rin_k = _keys(sp["new_biz"]), _keys(sp["ren_new"])
+    rout_k, lap_k = _keys(sp["ren_old"]), _keys(sp["lapsed"])
+
+    def _cls(lk, side):
+        if side == "cur":
+            return "new" if lk in new_k else "renewed" if lk in rin_k else "continuing"
+        return "lapsed" if lk in lap_k else "renewed" if lk in rout_k else "continuing"
+
+    rows = []
+    for df, side in ((per_layer, "cur"), (prior_layers, "prior")):
+        if df is None or not len(df) or "layer_key" not in df.columns:
+            continue
+        d = df.copy(); d["layer_key"] = d["layer_key"].astype(str)
+        for _, x in d.iterrows():
+            rows.append((side, str(x.get("entity", "")), str(x.get("orbit", "")),
+                         _cls(x["layer_key"], side), float(x.get("per_sc") or 0)))
+    if not rows:
+        return None
+    name = "WF · Movement Data"
+    if name in wb.sheetnames:
+        del wb[name]
+    ws = wb.create_sheet(name)
+    ws.append(["side", "entity", "orbit", "mv_class", "per_sc"])
+    for row in rows:
+        ws.append(list(row))
+    ws.sheet_state = "hidden"
+    return 2, len(rows) + 1
+
+
+def _md_sumifs(first, last, side=None, cls=None, dimcol=None, member=None):
+    """A SUMIFS over the Movement Data tab, filtered by side / class / slice."""
+    parts = [f"{MD}!${MD_PSC}${first}:${MD_PSC}${last}"]
+    if side is not None:
+        parts += [f"{MD}!${MD_SIDE}${first}:${MD_SIDE}${last}", f'"{side}"']
+    if cls is not None:
+        parts += [f"{MD}!${MD_CLS}${first}:${MD_CLS}${last}", f'"{cls}"']
+    if dimcol is not None:
+        parts += [f"{MD}!${dimcol}${first}:${dimcol}${last}", f'"{member}"']
+    return "SUMIFS(" + ",".join(parts) + ")"
+
+
+def _slice_bridges(ws, r, per_layer, prior_layers, changes, pl_first, pl_last,
                    dims=("entity", "orbit")):
     # Manufacturer slice-bridges dropped (user 2026Q2): too many thin per-maker
     # waterfalls; manufacturer concentration is still on the 'By bus manufacturer'
     # composition panel above. Entity / orbit bridges are retained.
     #
-    # The prior per-layer snapshot is the ONE input not on a current workbook
-    # tab, so the three prior-derived movements (+New, −Run-off, ±Reval) for each
-    # slice are consolidated ONCE in a labelled anchor block; Closing is a live
-    # SUMIFS on Per Layer and Opening is derived (= Closing − New − Run-off −
-    # Reval). Every slice bridge below then REFERENCES the anchor cells — nothing
-    # in a bridge is a baked number (mirrors how the portfolio bridge links to
-    # Portfolio!).
-    cur = per_layer.copy(); prior = prior_layers.copy()
-    if "layer_key" in cur:
-        cur["layer_key"] = cur["layer_key"].astype(str)
-    if "layer_key" in prior:
-        prior["layer_key"] = prior["layer_key"].astype(str)
+    # Every cell here is a live SUMIFS over the hidden 'WF · Movement Data' tab —
+    # NOTHING baked — and the split is RENEWAL-AWARE: renewals (even onto a new
+    # programme id) show in a '↻ Renewals (reprice)' step, so run-off is only the
+    # genuinely-lapsed exposure, matching the portfolio bridge above.
+    md = _write_movement_data(ws.parent, per_layer, prior_layers, changes)
+    if md is None:
+        return r
+    first, last = md
+    cur = per_layer.copy()
     slices = []
     for dim in dims:
-        if dim not in cur or dim not in prior:
+        if dim not in cur:
             continue
-        crit = PL_ENT if dim == "entity" else PL_ORB
+        dimcol = MD_ENT if dim == "entity" else MD_ORB
+        plcol = PL_ENT if dim == "entity" else PL_ORB
         for m in (cur.groupby(dim)["per_sc"].sum()
                   .sort_values(ascending=False).head(6).index.tolist()):
-            slices.append((dim, m, crit))
+            slices.append((dim, str(m), dimcol, plcol))
 
-    # ---- anchor block: the prior-derived movements, referenced by the bridges ----
-    r = _section(ws, r, "Prior-quarter movement anchors  (prior per-layer "
-                 "snapshot — the one input not on a current tab; bridges below "
-                 "reference these cells, Closing is a live SUMIFS on Per Layer)")
-    hdr = r
-    for j, h in enumerate(["Slice", "Closing (live SUMIFS)", "+ New",
-                           "− Run-off", "± Reval", "Opening (= C−D−E−F)"]):
-        cc = ws.cell(row=hdr, column=2 + j, value=h)
-        cc.font = F_HDR; cc.fill = FILL_HDR
-        cc.alignment = Alignment(horizontal="left" if j == 0 else "center")
-    r += 1
-    anchors = {}
-    for dim, m, crit in slices:
-        c = cur[cur[dim] == m]; p = prior[prior[dim] == m]
-        ck, pk = set(c["layer_key"]), set(p["layer_key"])
-        new = float(c[c["layer_key"].isin(ck - pk)]["per_sc"].sum())
-        dropped = float(p[p["layer_key"].isin(pk - ck)]["per_sc"].sum())
-        common = ck & pk
-        cc = c[c["layer_key"].isin(common)].set_index("layer_key")["per_sc"]
-        pp = p[p["layer_key"].isin(common)].set_index("layer_key")["per_sc"]
-        move = float((cc - pp).sum())
-        label = dim.replace("bus_manufacturer", "manufacturer")
-        ws.cell(row=r, column=2, value=f"{label}: {m}").font = F_CELL
-        _fcell(ws, r, 3, _sumifs(crit, m, first, last))     # C  closing (live)
-        _fcell(ws, r, 4, new)                                # D  + new
-        _fcell(ws, r, 5, -dropped)                           # E  − run-off
-        _fcell(ws, r, 6, move)                               # F  ± reval
-        _fcell(ws, r, 7, f"=C{r}-D{r}-E{r}-F{r}")            # G  opening (derived)
-        anchors[(dim, m)] = dict(closing=f"C{r}", new=f"D{r}", runoff=f"E{r}",
-                                 reval=f"F{r}", opening=f"G{r}")
-        r += 1
-    r += 2
-
-    # ---- the bridges: every source cell references the anchor block above ----
-    for dim, m, crit in slices:
-        a = anchors[(dim, m)]
-        steps = [("Opening", "prior", f"={a['opening']}", "total"),
-                 ("+ New", None, f"={a['new']}", "auto"),
-                 ("− Run-off", None, f"={a['runoff']}", "auto"),
-                 ("± Reval", None, f"={a['reval']}", "auto"),
+    for dim, m, dimcol, plcol in slices:
+        def s(**kw):
+            return _md_sumifs(first, last, dimcol=dimcol, member=m, **kw)
+        opening = s(side="prior")
+        # reported closing ties to the authoritative Per Layer book (not the
+        # helper tab), so any classification gap surfaces as a CHECK.
+        closing = _sumifs(plcol, m, pl_first, pl_last)[1:]  # strip leading '='
+        new = s(side="cur", cls="new")
+        ren_in = s(side="cur", cls="renewed")
+        ren_out = s(side="prior", cls="renewed")
+        runoff = s(side="prior", cls="lapsed")
+        cont_cur = s(side="cur", cls="continuing")
+        cont_pri = s(side="prior", cls="continuing")
+        steps = [("Opening", "prior", f"={opening}", "total"),
+                 ("+ New business", "genuine", f"={new}", "auto"),
+                 ("↻ Renewals (reprice)", "renewed", f"={ren_in}-{ren_out}", "auto"),
+                 ("− Run-off", "lapsed", f"=-{runoff}", "auto"),
+                 ("± Reval", "continuing", f"={cont_cur}-{cont_pri}", "auto"),
                  ("Closing", "current", None, "total")]
         label = dim.replace("bus_manufacturer", "manufacturer")
         r = _waterfall_block(ws, r, 2, f"{label}: {m}", steps,
-                             reported_close=f"={a['closing']}",
-                             chart_h=6.4, chart_w=13) + 1
+                             reported_close=f"={closing}",
+                             chart_h=6.6, chart_w=13) + 1
     return r
 
 
