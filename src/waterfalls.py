@@ -145,7 +145,7 @@ def _scen_ref(ref, block, entity, scenario, col):
 #  Core floating-waterfall block (formula scaffold + stacked chart)            #
 # --------------------------------------------------------------------------- #
 def _waterfall_block(ws, r0, c0, heading, steps, reported_close=None,
-                     chart_h=7.8, chart_w=15.5, tie=True):
+                     chart_h=7.8, chart_w=15.5, tie=True, chart=True):
     """steps: (label, detail, source, kind). source may be a number OR an
     '=...' formula string; both render and tie out the same way."""
     if heading:
@@ -192,23 +192,24 @@ def _waterfall_block(ws, r0, c0, heading, steps, reported_close=None,
             cc.number_format = MONEY; cc.font = F_CELL
         r += 1
     last = r - 1
-    ch = BarChart(); ch.type = "col"; ch.grouping = "stacked"; ch.overlap = 100
-    ch.gapWidth = 45; ch.height = chart_h; ch.width = chart_w
-    ch.y_axis.numFmt = MONEY_M; ch.y_axis.title = "$m"
-    ch.x_axis.delete = False; ch.y_axis.delete = False
-    cats = Reference(ws, min_col=c0, min_row=first, max_row=last)
-    for off in (4, 5, 6, 7):
-        ch.add_data(Reference(ws, min_col=c0 + off, min_row=hr, max_row=last),
-                    titles_from_data=True)
-    ch.set_categories(cats)
-    sb, sd, su, st = ch.series
-    sb.graphicalProperties = GraphicalProperties(); sb.graphicalProperties.noFill = True
-    sb.graphicalProperties.line.noFill = True
-    sd.graphicalProperties = GraphicalProperties(solidFill=RED)
-    su.graphicalProperties = GraphicalProperties(solidFill=GREEN)
-    st.graphicalProperties = GraphicalProperties(solidFill=NAVY)
-    ch.legend = None
-    ws.add_chart(ch, f"{_L(c0)}{last + 2}")
+    if chart:
+        ch = BarChart(); ch.type = "col"; ch.grouping = "stacked"; ch.overlap = 100
+        ch.gapWidth = 45; ch.height = chart_h; ch.width = chart_w
+        ch.y_axis.numFmt = MONEY_M; ch.y_axis.title = "$m"
+        ch.x_axis.delete = False; ch.y_axis.delete = False
+        cats = Reference(ws, min_col=c0, min_row=first, max_row=last)
+        for off in (4, 5, 6, 7):
+            ch.add_data(Reference(ws, min_col=c0 + off, min_row=hr, max_row=last),
+                        titles_from_data=True)
+        ch.set_categories(cats)
+        sb, sd, su, st = ch.series
+        sb.graphicalProperties = GraphicalProperties(); sb.graphicalProperties.noFill = True
+        sb.graphicalProperties.line.noFill = True
+        sd.graphicalProperties = GraphicalProperties(solidFill=RED)
+        su.graphicalProperties = GraphicalProperties(solidFill=GREEN)
+        st.graphicalProperties = GraphicalProperties(solidFill=NAVY)
+        ch.legend = None
+        ws.add_chart(ch, f"{_L(c0)}{last + 2}")
     if tie and reported_close is not None:
         tr = last + 2
         ws.column_dimensions[_L(c0 + 9)].width = 16
@@ -434,8 +435,20 @@ def _wf_exposure(wb, per_layer, changes, params, ref, prior_layers=None):
         ("Max Risk", allp, base_v)], total) + 1
 
     if prior_layers is not None and len(prior_layers):
-        r = _section(ws, r, "Movement by slice (opening → closing) — renewal-aware")
-        _slice_bridges(ws, r, per_layer, prior_layers, changes, first, last)
+        # Per-slice bridges are retained but HIDDEN (user 2026Q2): the portfolio
+        # bridge + composition above cover the movement story; the per-entity /
+        # per-orbit detail is collapsed out of the main view. Build without charts
+        # (they would float over hidden rows), then hide the whole section.
+        ws.cell(row=r, column=2, value=(
+            "▸  Per-slice movement bridges (by entity / orbit) are hidden below — "
+            "unhide the rows to view. Renewal-aware; data live off 'WF · Movement "
+            "Data'.")).font = F_SUB
+        r += 2
+        slice_start = r
+        end = _slice_bridges(ws, r, per_layer, prior_layers, changes, first, last,
+                             charts=False)
+        for i in range(slice_start, (end or slice_start) + 1):
+            ws.row_dimensions[i].hidden = True
     else:
         ws.cell(row=r, column=2, value=(
             "Per-slice opening→closing bridges (by entity / orbit / manufacturer) "
@@ -509,7 +522,7 @@ def _md_sumifs(first, last, side=None, cls=None, dimcol=None, member=None):
 
 
 def _slice_bridges(ws, r, per_layer, prior_layers, changes, pl_first, pl_last,
-                   dims=("entity", "orbit")):
+                   dims=("entity", "orbit"), charts=True):
     # Manufacturer slice-bridges dropped (user 2026Q2): too many thin per-maker
     # waterfalls; manufacturer concentration is still on the 'By bus manufacturer'
     # composition panel above. Entity / orbit bridges are retained.
@@ -555,7 +568,7 @@ def _slice_bridges(ws, r, per_layer, prior_layers, changes, pl_first, pl_last,
         label = dim.replace("bus_manufacturer", "manufacturer")
         r = _waterfall_block(ws, r, 2, f"{label}: {m}", steps,
                              reported_close=f"={closing}",
-                             chart_h=6.6, chart_w=13) + 1
+                             chart_h=6.6, chart_w=13, chart=charts) + 1
     return r
 
 
