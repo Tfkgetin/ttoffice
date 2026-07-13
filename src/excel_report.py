@@ -3845,6 +3845,144 @@ def _s3123_ig_addons(wb, grid, params, per_layer=None):
     return {"sheet": ws.title, "fihl": fihl_ref}
 
 
+# Netting-down-walk waterfall (JJ's underwriter sign-off format): one chart per
+# entity × scenario. Categories & their kind, in the exact filed order.
+_NDW_CATS = [("Gross", "total"), ("Outwards QS", "down"), ("Net of QS", "total"),
+             ("XoL Recovery", "down"), ("Outwards RIPS", "up"),
+             ("Net of XoL", "total"), ("IGR QS", "down"), ("IGR XoL", "down"),
+             ("Net Loss", "total"), ("Net Loss Inc RIPS", "total"),
+             ("IG Equity Share", "up"), ("Final Net Loss", "total")]
+_NDW_ENTS = ["FIHL", "FUL", "FIID", "FIBL", "S3123", "S2126"]
+
+
+def _ndw_values(entity, scen, grid, s3grid, s2grid):
+    """The 12 walk levels/deltas for one entity × scenario, from the engine
+    grids — same numbers as the Summary / RDS Input Template.
+
+    IG entities net Gross → Outwards QS → (IGR QS/XoL) → Net Loss, then add back
+    the IG Equity share (FIHL/FIBL). FIHL uses its EX-add-on gross/net (the S3123
+    inwards QS is a separate arrangement, shown on the S3123 walk). Syndicates:
+    S3123 cedes its QS to IG as the Outwards QS; S2126 has none (net = gross)."""
+    def _row(g, ent):
+        if g is None or not len(g):
+            return None
+        b = g[(g["entity"] == ent) & (g["scenario"] == scen)] if "entity" in g.columns \
+            else g[g["scenario"] == scen]
+        return b.iloc[0] if len(b) else None
+
+    if entity in ("S3123", "S2126"):
+        row = _row(s3grid if entity == "S3123" else s2grid, entity)
+        gr = float(row.get("gross") or 0) if row is not None else 0.0
+        nt = float(row.get("net") or 0) if row is not None else 0.0
+        oqs = gr - nt                       # syndicate QS ceded to IG (0 for S2126)
+        return {"Gross": gr, "Outwards QS": -oqs, "Net of QS": nt,
+                "XoL Recovery": 0.0, "Outwards RIPS": 0.0, "Net of XoL": nt,
+                "IGR QS": 0.0, "IGR XoL": 0.0, "Net Loss": nt,
+                "Net Loss Inc RIPS": nt, "IG Equity Share": 0.0,
+                "Final Net Loss": nt}
+    row = _row(grid, entity)
+    if row is None:
+        return None
+    gr = float(row.get("gross") or 0)
+    oqs = float(row.get("ext_qs") or 0)
+    iqs = float(row.get("igr_qs_ceded") or 0)
+    ixol = float(row.get("xol_ceded") or 0)
+    eq = float(row.get("equity_usd") or 0)
+    net_of_qs = gr - oqs
+    net_loss = net_of_qs - iqs - ixol       # ex-add-on net (FIHL) / net (FUL/FIID)
+    return {"Gross": gr, "Outwards QS": -oqs, "Net of QS": net_of_qs,
+            "XoL Recovery": 0.0, "Outwards RIPS": 0.0, "Net of XoL": net_of_qs,
+            "IGR QS": -iqs, "IGR XoL": -ixol, "Net Loss": net_loss,
+            "Net Loss Inc RIPS": net_loss, "IG Equity Share": eq,
+            "Final Net Loss": net_loss + eq}
+
+
+def _ndw_block(ws, r0, entity, scen, vals):
+    """One backing table (cols B-G) + waterfall chart (anchored col I)."""
+    from openpyxl.chart.legend import LegendEntry
+    ttl = f"Contingency RDS Netting Down Walk — {entity} · {scen}"
+    ws.cell(r0, 2, ttl).font = F_SECT
+    hr = r0 + 1
+    for j, h in enumerate(["Category", "Value", "Base", "Decrease", "Increase", "Total"]):
+        c = ws.cell(hr, 2 + j, h); c.font = F_HDR; c.fill = FILL_HDR
+        c.alignment = Alignment(horizontal="left" if j == 0 else "center")
+    first = hr + 1
+    running = 0.0
+    for i, (cat, kind) in enumerate(_NDW_CATS):
+        rr = first + i
+        v = float(vals.get(cat) or 0.0)
+        base = down = up = tot = None
+        if kind == "total":
+            base, tot = 0.0, v; running = v
+        elif kind == "down":
+            base, down = running + v, -v; running = running + v
+        else:  # up
+            base, up = running, v; running = running + v
+        ws.cell(rr, 2, cat).font = F_CELL
+        _cell(ws, rr, 3, v, money=True)                 # signed source (audit)
+        _cell(ws, rr, 4, base, money=True)
+        if down is not None:
+            _cell(ws, rr, 5, down, money=True)
+        if up is not None:
+            _cell(ws, rr, 6, up, money=True)
+        if tot is not None:
+            _cell(ws, rr, 7, tot, money=True)
+    last = first + len(_NDW_CATS) - 1
+
+    ch = BarChart(); ch.type = "col"; ch.grouping = "stacked"; ch.overlap = 100
+    ch.gapWidth = 30; ch.title = ttl; ch.height = 8.0; ch.width = 17.5
+    ch.y_axis.numFmt = '#,##0,,"m"'; ch.y_axis.title = "$"
+    ch.x_axis.delete = False; ch.y_axis.delete = False
+    cats = Reference(ws, min_col=2, min_row=first, max_row=last)
+    for col in (4, 5, 6, 7):                            # Base, Decrease, Increase, Total
+        ch.add_data(Reference(ws, min_col=col, min_row=hr, max_row=last),
+                    titles_from_data=True)
+    ch.set_categories(cats)
+    s_base, s_down, s_up, s_tot = ch.series
+    s_base.graphicalProperties = GraphicalProperties()
+    s_base.graphicalProperties.noFill = True
+    s_base.graphicalProperties.line.noFill = True
+    s_down.graphicalProperties = GraphicalProperties(solidFill="ED7D31")   # orange
+    s_up.graphicalProperties = GraphicalProperties(solidFill="1F4E79")     # blue
+    s_tot.graphicalProperties = GraphicalProperties(solidFill="2E7D32")    # green
+    for s in (s_down, s_up, s_tot):
+        s.dLbls = DataLabelList(); s.dLbls.showVal = True
+        s.dLbls.numFmt = '#,##0,,"m"'
+    ch.legend.position = "t"
+    ch.legend.legendEntry = [LegendEntry(idx=0, delete=True)]  # hide the Base series
+    ch.plotVisOnly = False
+    ws.add_chart(ch, f"I{r0}")
+    return last
+
+
+def _netting_down_walk(wb, grid, s3grid, s2grid, params):
+    """'Netting Down Walk' tab — JJ's underwriter sign-off waterfall, one chart
+    per entity × scenario (all five RDS × all six entities). Backing tables in
+    cols B-G (scaffolding D-G hidden), charts on the right."""
+    ws = wb.create_sheet("Netting Down Walk")
+    ws.sheet_view.showGridLines = False
+    _title(ws, "Contingency RDS — Netting Down Walk",
+           f"as-at {params.as_at} · one waterfall per entity × scenario · Gross → "
+           f"Outwards QS → IGR → Net Loss → IG Equity → Final Net Loss · ties to "
+           f"the Summary / RDS Input Template")
+    ws.column_dimensions["B"].width = 20
+    ws.column_dimensions["C"].width = 15
+    r = 5
+    for entity in _NDW_ENTS:
+        _section(ws, r, entity)
+        r += 1
+        for scen in SCEN_ORDER:
+            vals = _ndw_values(entity, scen, grid, s3grid, s2grid)
+            if vals is None:
+                continue
+            _ndw_block(ws, r, entity, scen, vals)
+            r += 17
+        r += 1
+    for col in ("D", "E", "F", "G"):                    # chart scaffolding
+        ws.column_dimensions[col].hidden = True
+    return ws
+
+
 def write_results(path, per_layer, sw, mr, grid, params, source,
                   recon=None, changes=None, excluded=None,
                   corrections=None, manual_includes=None,
@@ -3945,6 +4083,10 @@ def write_results(path, per_layer, sw, mr, grid, params, source,
     _per_layer(wb, per_layer, contrib=_contrib)
     _rds_input_template(wb, grid, s3123_grid, params, summary_map,
                         s2grid=s2126_grid)   # paste-ready regulator block
+    try:
+        _netting_down_walk(wb, grid, s3123_grid, s2126_grid, params)
+    except Exception as _e:  # noqa: BLE001 - a chart tab is non-essential
+        print(f"      WARNING: Netting Down Walk tab skipped ({_e})")
     if s3123_grid is not None and len(s3123_grid):
         from .s3123_sheet import write_s3123_sheet
         write_s3123_sheet(wb, s3123_grid, recon=s3123_recon,
@@ -3953,7 +4095,7 @@ def write_results(path, per_layer, sw, mr, grid, params, source,
     if "Sheet" in wb.sheetnames:
         del wb["Sheet"]
     order = ["Cover", "Executive Summary", "Summary", "RDS Input Template",
-             "S3123 & Equity (IG)", "S3123 RDS", "Charts",
+             "S3123 & Equity (IG)", "S3123 RDS", "Netting Down Walk", "Charts",
              "Changes", "Change Narrative", "Book Movement",
              "WF · Exposure Bridge", "WF · Loss Movement",
              "Portfolio", "Netting Waterfalls", "Space Weather", "Max Risk",
@@ -3963,7 +4105,8 @@ def write_results(path, per_layer, sw, mr, grid, params, source,
                     if s.title in order else 99)
     # print hygiene + autofit on every sheet
     _no_autofit = {"Charts", "Cover", "Executive Summary", "Changes",
-                   "WF · Exposure Bridge", "WF · Loss Movement"}
+                   "WF · Exposure Bridge", "WF · Loss Movement",
+                   "Netting Down Walk"}
     for ws in wb.worksheets:
         try:
             _print_setup(ws, params, ws.title)
