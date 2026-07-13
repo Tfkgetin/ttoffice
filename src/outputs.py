@@ -163,6 +163,16 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
             summ = renewals.summarize(gaps["renewal_state"])
             print("      renewal check (lapsed): "
                   + ", ".join(f"{renewals.label(k)}={v}" for k, v in summ.items()))
+        # Per-layer movement class (renewal-aware) so the Per Layer tab can
+        # highlight new / renewed layers for the movement walk-through.
+        if "layer_key" in per_layer.columns:
+            def _keys(fr):
+                return (set(fr["layer_key"].astype(str))
+                        if fr is not None and len(fr) and "layer_key" in fr.columns else set())
+            _nk, _rk = _keys(sp["new_biz"]), _keys(sp["ren_new"])
+            per_layer = per_layer.copy()
+            per_layer["mv_class"] = per_layer["layer_key"].astype(str).map(
+                lambda k: "new" if k in _nk else "renewed" if k in _rk else "continuing")
 
     excluded = getattr(engine_mod.run_engine, "last_excluded", None)
     corrections = getattr(ingest_mod.load, "last_corrections", None)

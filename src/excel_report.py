@@ -16,7 +16,7 @@ import pandas as pd
 from . import charts_xlsx
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from openpyxl.formatting.rule import DataBarRule, CellIsRule, ColorScaleRule
+from openpyxl.formatting.rule import DataBarRule, CellIsRule, ColorScaleRule, FormulaRule
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.chart import BarChart, Reference, Series
@@ -316,9 +316,10 @@ def _breakdown(ws, r, label_field, group, total, label_w=30,
 
 # ---- Per Layer column map (for live formulas referencing the data backbone) ----
 _PL_SHEET = "Per Layer"
-_PL_KEEP = ["program_id", "layer_id", "entity", "mapping_code", "spacecraft_id",
-            "spacecraft_name", "orbit", "bus_manufacturer", "inception",
-            "off_risk_date", "rpf", "per_sc", "ext_qs", "s3123_qs", "equity_usd",
+_PL_KEEP = ["program_id", "layer_id", "entity", "mv_class", "mapping_code",
+            "spacecraft_id", "spacecraft_name", "orbit", "bus_manufacturer",
+            "inception", "off_risk_date", "rpf", "per_sc", "ext_qs", "s3123_qs",
+            "equity_usd",
             # engine's own per-layer S3123 basis — so linkify can compute s3123_qs
             # / equity EXACTLY (3-tier factor + full eligibility) instead of a
             # brittle 2-tier date reconstruction:
@@ -369,10 +370,11 @@ _FIHL_CONTRIB = {"Proton Flare": "pf_fihl", "Generic Defect": "gd_fihl",
 # flags) and is collapsed into an Excel column outline — hidden by default,
 # expandable via the +/- so nothing is lost.
 _PL_PRIMARY = {
-    "program_id", "layer_id", "entity", "mapping_code", "spacecraft_id",
-    "spacecraft_name", "orbit", "bus_manufacturer", "inception", "off_risk_date",
-    "rpf", "per_sc", "ext_qs", "s3123_qs", "equity_usd", "igr_qs_rate",
-    "igr_qs_ceded", "net_of_qs", "xol_ceded", "net_of_xol", "total_fibl_ceded",
+    "program_id", "layer_id", "entity", "mv_class", "mapping_code",
+    "spacecraft_id", "spacecraft_name", "orbit", "bus_manufacturer", "inception",
+    "off_risk_date", "rpf", "per_sc", "ext_qs", "s3123_qs", "equity_usd",
+    "igr_qs_rate", "igr_qs_ceded", "net_of_qs", "xol_ceded", "net_of_xol",
+    "total_fibl_ceded",
 }
 
 
@@ -1951,6 +1953,28 @@ def _per_layer(wb, per_layer, contrib=None):
                 c.number_format = MONEY
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(keep))}{len(per_layer) + 1}"
+
+    # Movement highlight: shade the whole row by its renewal-aware class so the
+    # tab reads as a movement walk-through — new business (green), renewals
+    # (blue), continuing (unshaded). Filter on mv_class to isolate each.
+    if "mv_class" in _idx:
+        _mvL = get_column_letter(_idx["mv_class"] + 1)
+        _lastL = get_column_letter(len(keep))
+        _rng = f"A2:{_lastL}{len(per_layer) + 1}"
+        _new_fill = PatternFill("solid", fgColor="DDF0E0")   # soft green
+        _ren_fill = PatternFill("solid", fgColor="DEE9F6")   # soft blue
+        ws.conditional_formatting.add(_rng, FormulaRule(
+            formula=[f'=${_mvL}2="new"'], fill=_new_fill, stopIfTrue=False))
+        ws.conditional_formatting.add(_rng, FormulaRule(
+            formula=[f'=${_mvL}2="renewed"'], fill=_ren_fill, stopIfTrue=False))
+        _note(ws.cell(row=1, column=_idx["mv_class"] + 1),
+              "Renewal-aware movement class (this quarter vs prior filing):\n"
+              "• new = genuine new business (row shaded green)\n"
+              "• renewed = renewal of a prior spacecraft, incl. onto a new "
+              "programme id (row shaded blue)\n"
+              "• continuing = same layer on both books.\n"
+              "Filter this column to isolate each. Lapsed layers are off the "
+              "current book — see Book Movement.")
 
 
 
