@@ -4007,6 +4007,76 @@ def _netting_down_walk(wb, grid, s3grid, s2grid, params):
     return ws
 
 
+def _scenario_attribution(wb, attr, params):
+    """'Scenario Attribution' tab — each entity × scenario gross Δ split into
+    New / Renewals / Continuing / Run-off (they sum to the Δ exactly), with the
+    top named spacecraft drivers per bucket for the input-template write-up."""
+    ws = wb.create_sheet("Scenario Attribution")
+    ws.sheet_view.showGridLines = False
+    _title(ws, "Scenario movement attribution — Q-on-Q gross",
+           f"as-at {params.as_at} · each entity × scenario Δ decomposed into "
+           f"New − Run-off ± Renewals ± Continuing (sums to the Δ), with the top "
+           f"named spacecraft in each — paste-ready detail for the input template")
+    for col, w in zip("BCDEFGHI", [17, 14, 14, 13, 13, 13, 13, 13]):
+        ws.column_dimensions[col].width = w
+
+    def _m(v):
+        return f"{'+' if v >= 0 else '−'}${abs(float(v)) / 1e6:,.1f}m"
+
+    def _drv(lst):
+        return ", ".join(f"{n} {_m(v)}" for n, v in lst)
+
+    r = 5
+    for ent in ["FIHL", "FUL", "FIID"]:
+        rows = [(scen, attr[(ent, scen)]) for scen in SCEN_ORDER
+                if (ent, scen) in attr]
+        if not rows:
+            continue
+        _section(ws, r, ent); r += 1
+        r = _hdr(ws, r, 2, ["Scenario", "Prior", "Current", "Δ gross", "+ New",
+                            "↻ Renewals", "± Continuing", "− Run-off"],
+                 [17, 14, 14, 13, 13, 13, 13, 13])
+        for scen, d in rows:
+            b = d["buckets"]; alt = SCEN_ORDER.index(scen) % 2 == 0
+            _cell(ws, r, 2, scen, alt=alt, bold=True)
+            _cell(ws, r, 3, d["prior"], alt=alt, money=True)
+            _cell(ws, r, 4, d["cur"], alt=alt, money=True)
+            _cell(ws, r, 5, d["delta"], alt=alt, money=True, bold=True)
+            _cell(ws, r, 6, b["new"], alt=alt, money=True)
+            _cell(ws, r, 7, b["renewals"], alt=alt, money=True)
+            _cell(ws, r, 8, b["continuing"], alt=alt, money=True)
+            _cell(ws, r, 9, b["lapsed"], alt=alt, money=True)
+            r += 1
+            parts = []
+            for lbl, key in (("New", "new"), ("Run-off", "lapsed"),
+                             ("Renewals", "renewals"), ("Continuing", "continuing")):
+                dr = d["drivers"].get(key) or []
+                if dr:
+                    parts.append(f"{lbl}: " + _drv(dr[:3]))
+            txt = "   ▸ " + "   ·   ".join(parts) if parts else "   ▸ (no material drivers)"
+            c = ws.cell(r, 2, txt); c.font = F_SUB
+            c.alignment = Alignment(wrap_text=True, vertical="top")
+            ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=9)
+            ws.row_dimensions[r].height = 42
+            r += 1
+        r += 1
+
+    n = ws.cell(r, 2, (
+        "How to read: the four buckets sum to the Δ exactly (every spacecraft is "
+        "in one bucket). New = spacecraft new to the book; Run-off = spacecraft "
+        "gone; Renewals = a prior spacecraft rewritten (incl. onto a new "
+        "programme id), current vs prior size; Continuing = same layer both "
+        "quarters (reval / RPF, and — for Space Weather / Max Risk — a bird "
+        "moving into or out of the binding selection). The named $ are that "
+        "spacecraft's contribution to THIS scenario, so paste them straight into "
+        "the template. IG entities shown; FIBL is a receiver and S3123/S2126 net "
+        "to their own tabs. Gross basis (FIHL ex add-ons)."))
+    n.font = F_SUB; n.alignment = Alignment(wrap_text=True, vertical="top")
+    ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=9)
+    ws.row_dimensions[r].height = 74
+    return ws
+
+
 def write_results(path, per_layer, sw, mr, grid, params, source,
                   recon=None, changes=None, excluded=None,
                   corrections=None, manual_includes=None,
