@@ -173,24 +173,11 @@ SELECT
     MonthsLeftOnRisk, [External QS], [Net of External QS], [QS FIBL Ceded],
     [Net of QS IGR], [XoL FIBL Ceded],
     [XoL FIBL Ceded] + [QS FIBL Ceded] AS [Total FIBL Ceded],
-    [Net of QS IGR] - [XoL FIBL Ceded] AS [Net of XoL IGR],
-    -- Renewal pointers from the PBI layer snapshot (single refreshed snapshot;
-    -- pin MAX(Snapshot Id)). The sentinel for "no renewal" is 0, so NULLIF it
-    -- to NULL. Renewed_To_* sit on the EXPIRING layer pointing forward to the
-    -- successor program and its UW status (Bound / Quoted-Awaiting FOT / NTU /
-    -- Declined). Drives the renewal-policy check; a LEFT JOIN so a missing
-    -- snapshot row just yields NULLs and never drops a layer.
-    REN.Renewed_To_Program_Id,
-    REN.Renewed_From_Program_Id,
-    REN.Renewed_To_UW_Status,
-    REN.Renewed_To_Inception
+    [Net of QS IGR] - [XoL FIBL Ceded] AS [Net of XoL IGR]
+    -- Renewal pointers are NOT joined here. They come from the OPTIONAL
+    -- renewal-watch query (sql/renewal_watch.sql, run separately by
+    -- renewals.load_watch), which degrades gracefully to the spacecraft
+    -- heuristic if the PBI snapshot table is unavailable. Keeping that JOIN out
+    -- of the core extract means a missing / renamed PBI table can never break
+    -- the on-risk run — the renewal classification just falls back.
 FROM XoLCalculations
-LEFT JOIN (
-    SELECT [Layer Id] AS Ren_LayerId,
-           NULLIF([Renewed To Program Id],  0) AS Renewed_To_Program_Id,
-           NULLIF([Renewed From Program Id], 0) AS Renewed_From_Program_Id,
-           [Renewed To UW Status]               AS Renewed_To_UW_Status,
-           [Renewed To Inception]               AS Renewed_To_Inception
-    FROM [J].[Pbi].[Layers_t]
-    WHERE [Snapshot Id] = (SELECT MAX([Snapshot Id]) FROM [J].[Pbi].[Layers_t])
-) REN ON REN.Ren_LayerId = XoLCalculations.LayerId
