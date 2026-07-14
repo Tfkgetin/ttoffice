@@ -105,6 +105,15 @@ def main():
     split_warn = ingest.check_consortium_split_coverage(p)
     if split_warn:
         print(f"      ⚠ {split_warn}")
+    # Standing completeness audit: enumerate any bound in-scope layer the extract
+    # dropped and that no rule carries (SQL-only, never raises). Persist to CSV.
+    cov_miss = ingest.coverage_audit(p, df)
+    if cov_miss:
+        import os as _os, pandas as _pd
+        _os.makedirs(outdir, exist_ok=True)
+        _pd.DataFrame(cov_miss).to_csv(_os.path.join(outdir, "coverage_misses.csv"),
+                                       index=False)
+        print(f"      → wrote {outdir}/coverage_misses.csv ({len(cov_miss)} layer(s))")
 
     print("[2/7] Engine…")
     df = engine.run_engine(df, p)

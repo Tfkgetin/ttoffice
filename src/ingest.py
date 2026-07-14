@@ -506,6 +506,71 @@ def check_consortium_split_coverage(params):
     return None
 
 
+def coverage_audit(params, df):
+    """Standing completeness audit (SQL-only, never raises).
+
+    `check_consortium_split_coverage` says *whether* the MGU split table is stale;
+    this says *which* specific bound, in-scope layers fell through as a result and
+    are NOT in the final book — i.e. potential MISSES you'd otherwise only find by
+    hand. Reads sql/coverage_check.sql (every in-scope bound layer + has_mgu_split
+    flag), then flags each row that the extract silently dropped
+    (has_mgu_split = 0) whose programme is not represented in `df` (the final book,
+    which already includes every roll-forward / manual_include). Result on
+    load.last_coverage_audit; returns the list."""
+    load.last_coverage_audit = []
+    ing = getattr(params, "ingest", {}) or {}
+    if ing.get("source") != "sql":
+        return []
+    sql_cfg = dict(ing.get("sql") or {})
+    qf = sql_cfg.get("coverage_query_file")
+    if not qf:
+        return []
+    try:
+        import pyodbc  # noqa: F401
+        from pathlib import Path
+        driver = sql_cfg.get("driver") or _pick_driver()
+        conn = (f"DRIVER={{{driver}}};SERVER={sql_cfg['server']};"
+                f"DATABASE={sql_cfg['database']};Trusted_Connection=yes;")
+        if "18" in str(driver):
+            conn += "TrustServerCertificate=yes;"
+        cn = pyodbc.connect(conn, timeout=30)
+        q = Path(qf).read_text().format(as_at=str(getattr(params, "as_at", "")))
+        cov = pd.read_sql(q, cn)
+        cn.close()
+    except Exception as e:  # noqa: BLE001 — optional audit, never break the run
+        print(f"      coverage audit: skipped ({type(e).__name__}: {e})")
+        return []
+    cov = cov.rename(columns={c: _norm(c) for c in cov.columns})
+    ren = {"programid": "program_id", "layerid": "layer_id",
+           "spacecraftid": "spacecraft_id", "spacecraftname": "spacecraft_name",
+           "controllingbody": "controlling_body", "hasmgusplit": "has_mgu_split",
+           "signedexposureusd": "signed_exposure_usd"}
+    cov = cov.rename(columns={k: v for k, v in ren.items() if k in cov.columns})
+    if "program_id" not in cov.columns or "has_mgu_split" not in cov.columns:
+        return []
+    represented = (set(df["program_id"].dropna().astype(str))
+                   if df is not None and "program_id" in df.columns else set())
+    miss = cov[(pd.to_numeric(cov["has_mgu_split"], errors="coerce") == 0)
+               & (~cov["program_id"].astype(str).isin(represented))].copy()
+    out = []
+    for _, r in miss.iterrows():
+        out.append({k: r.get(k) for k in
+                    ("program_id", "layer_id", "controlling_body", "orbit",
+                     "spacecraft_id", "spacecraft_name", "programme",
+                     "inception", "signed_exposure_usd")})
+    load.last_coverage_audit = out
+    if out:
+        tot = sum(float(m.get("signed_exposure_usd") or 0) for m in out)
+        progs = sorted({str(m["program_id"]) for m in out})
+        print(f"      ⚠  coverage audit: {len(out)} bound in-scope layer(s) "
+              f"(${tot:,.0f}) DROPPED by the extract and NOT in the book — "
+              f"potential MISSES across {len(progs)} programme(s): "
+              f"{', '.join(progs)}")
+        print("         (no MGU consortium split for their inception; add the "
+              "split row or carry via renewal_rollforward / manual_include)")
+    return out
+
+
 def _rollforward_dicts(prior, rules):
     """Turn `renewal_rollforward` rules into manual_include dicts by cloning the
     prior book's layers for each `from_program` into `to_program` at the renewal

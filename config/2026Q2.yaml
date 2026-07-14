@@ -337,6 +337,10 @@ ingest:
     server: LON-SQLP-V005
     database: SpaceTrax_Data
     query_file: sql/space_rds_onrisk_asat.sql
+    # Standing completeness audit — every bound in-scope layer the
+    # extract could silently drop (missing MGU split); the pipeline
+    # flags any that are dropped AND not carried. Optional; SQL-only.
+    coverage_query_file: sql/coverage_check.sql
     # Renewal-policy check: forward renewal pointers from the PBI layer snapshot
     # (J.Pbi.Layers_t), used to classify the quarter's lapsed layers as
     # renewed-bound / in-progress / NTU-Declined / no-pointer. Optional — remove
