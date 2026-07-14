@@ -904,6 +904,33 @@ def _rds_input_template(wb, grid, s3grid, params, summary_map=None, s2grid=None)
             return f"=IFERROR({S}{m['equity']}/{S}{m['net']},0)"
         return None
 
+    # --- syndicate columns (S3123 / S2126): LIVE =SUM over the Per Layer
+    # contribution columns, so those columns are formula-driven too (not baked).
+    # The Per Layer sheet is built just before this. Max Risk has no per-layer
+    # Lloyd's contribution column, so it falls back to the engine value.
+    _pl_cols, _pl_n = {}, 0
+    if _PL_SHEET in wb.sheetnames:
+        _plws = wb[_PL_SHEET]
+        _pl_cols = {_plws.cell(1, c).value: get_column_letter(c)
+                    for c in range(1, _plws.max_column + 1) if _plws.cell(1, c).value}
+        _pl_n = _plws.max_row
+    _SYN_PREFIX = {"S3123": "s3123", "S2126": "s2126"}
+    _SYN_SLUG = {"Proton Flare": "pf", "Space Weather": "sw",
+                 "Generic Defect": "gd", "Space Debris": "sd"}
+
+    def syn_formula(label, scen, ent, gcell, ncell):
+        pfx = _SYN_PREFIX.get(ent); slug = _SYN_SLUG.get(scen)
+        if not pfx or not slug:
+            return None
+        g = _pl_cols.get(f"{pfx}_{slug}_g"); n = _pl_cols.get(f"{pfx}_{slug}_n")
+        if label == "Gross Loss" and g:
+            return f"=SUM('{_PL_SHEET}'!${g}$2:${g}${_pl_n})"
+        if label in ("Net Loss", "Net Loss inc RIPS") and n:
+            return f"=SUM('{_PL_SHEET}'!${n}$2:${n}${_pl_n})"
+        if label == "Outwards QS Recovery" and gcell and ncell:
+            return f"={gcell}-{ncell}"          # QS to IG = gross − net (live)
+        return None
+
     r = 5
     for scen in SCEN_ORDER:
         ws.cell(row=r, column=2, value=scen).font = F_SECT
@@ -919,6 +946,7 @@ def _rds_input_template(wb, grid, s3grid, params, summary_map=None, s2grid=None)
         for col in "DEFGHI":
             ws.column_dimensions[col].width = 16
         r += 1
+        gross_row = net_row = None            # per-block anchors for syndicate QS
         for k, (label, rid) in enumerate(ROWS):
             alt = k % 2 == 0
             bold = label in ("Gross Loss", "Net Loss", "Net Loss inc RIPS")
@@ -926,7 +954,13 @@ def _rds_input_template(wb, grid, s3grid, params, summary_map=None, s2grid=None)
             _cell(ws, r, 3, rid, alt=alt)
             for j, e in enumerate(ENTS):
                 v, is_pct, is_blank = cell_value(label, rid, scen, e)
-                f = cell_formula(label, scen, e)   # live 'Summary'! ref or None
+                if e in _SYN_PREFIX:            # S3123 / S2126 → live Per Layer SUM
+                    _col = get_column_letter(4 + j)
+                    f = syn_formula(label, scen, e,
+                                    f"{_col}{gross_row}" if gross_row else None,
+                                    f"{_col}{net_row}" if net_row else None)
+                else:
+                    f = cell_formula(label, scen, e)   # live 'Summary'! ref or None
                 if is_blank:
                     c = _cell(ws, r, 4 + j, None, alt=alt)
                     c.fill = PatternFill("solid", start_color="E8E8E8")
@@ -942,13 +976,20 @@ def _rds_input_template(wb, grid, s3grid, params, summary_map=None, s2grid=None)
                     c.alignment = Alignment(horizontal="right")
                 else:
                     _cell(ws, r, 4 + j, v, alt=alt, money=True, bold=bold)
+            if label == "Gross Loss":
+                gross_row = r
+            elif label == "Net Loss":
+                net_row = r
             r += 1
         r += 2
     ws.cell(row=r, column=2,
-            value="Grey cells are not entered for the Space book (S2126 absent; "
-                  "IGR rows apply to FUL/FIID only; IG Equity % to FIHL/FIBL "
-                  "only). Values are live-data; on a frozen-extract run they tie "
-                  "the filed template to the dollar.").font = F_SUB
+            value="Every value is LIVE: IG columns link to the Summary tab; S3123 "
+                  "/ S2126 columns =SUM the Per Layer scenario contributions (QS to "
+                  "IG = gross − net). Grey cells are not entered for the Space book "
+                  "(IGR rows apply to FUL/FIID only; IG Equity % to FIHL/FIBL only; "
+                  "S3123/S2126 Max Risk is an engine value — no Lloyd's per-layer "
+                  "column). On a frozen-extract run they tie to the filed template "
+                  "to the dollar.").font = F_SUB
     ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=9)
     ws.row_dimensions[r].height = 28
     return ws
