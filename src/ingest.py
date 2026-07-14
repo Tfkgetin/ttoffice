@@ -638,10 +638,62 @@ def _apply_manual_includes(df, params, extra=None):
     return out
 
 
+def _reconcile_rollforward(source_df, params, extra):
+    """Reconcile CARRIED renewals (renewal_rollforward + manual_include) against
+    what the SOURCE extract already bound, and WARN on any overlap the per-bird
+    safeguard in `_apply_manual_includes` cannot catch.
+
+    The per-bird safeguard dedups on layer_key / spacecraft_id, so it is blind to
+    a source row that carries the SAME programme but with a NULL spacecraft_id
+    (e.g. an ARABSAT / Eutelsat 'Fleet IO — Top Layer' aggregate). When that
+    happens the roll-forward birds and the source aggregate can BOTH survive →
+    double-count, or the source aggregate lands NULL-orbit and misses the GEO
+    scenarios. Non-destructive: this only reports (retiring a carry rule that
+    still supplies per-bird orbit detail could silently drop exposure — the
+    analyst decides). Stored on load.last_rollforward_reconcile.
+    """
+    load.last_rollforward_reconcile = []
+    if source_df is None or "program_id" not in source_df.columns:
+        return
+    src_pids = set(source_df["program_id"].dropna().astype(str))
+    carried = {}
+    for r in (params.raw.get("renewal_rollforward") or []):
+        if r.get("to_program") is not None:
+            carried.setdefault(str(r["to_program"]), "renewal_rollforward")
+    for g in (extra or []):
+        if g.get("program_id") is not None:
+            carried.setdefault(str(g["program_id"]), "renewal_rollforward")
+    for it in (params.raw.get("manual_include") or []):
+        if it.get("program_id") is not None:
+            carried.setdefault(str(it["program_id"]), "manual_include")
+    hits = []
+    for pid, kind in carried.items():
+        if pid not in src_pids:
+            continue                       # carried and NOT in source → correct
+        sub = source_df[source_df["program_id"].astype(str) == pid]
+        named = int(sub["spacecraft_id"].notna().sum()) if "spacecraft_id" in sub else 0
+        hits.append({"program_id": pid, "carried_by": kind,
+                     "source_layers": int(len(sub)), "source_per_bird": named,
+                     "source_null_spacecraft": int(len(sub) - named)})
+    load.last_rollforward_reconcile = hits
+    if hits:
+        print(f"      ⚠  renewal reconcile: {len(hits)} carried programme(s) also "
+              f"present in the source feed — verify no double-count:")
+        for h in hits:
+            print(f"         · programme {h['program_id']} ({h['carried_by']}): "
+                  f"source has {h['source_layers']} layer(s) "
+                  f"[{h['source_per_bird']} per-bird, "
+                  f"{h['source_null_spacecraft']} NULL-spacecraft]. "
+                  "Per-bird rows are deduped by the safeguard; NULL-spacecraft "
+                  "aggregates are NOT — retire the carry rule or exclude the "
+                  "source aggregate.")
+
+
 def load(params) -> pd.DataFrame:
     ing = params.ingest
     load.last_corrections = []
     load.last_manual_includes = []
+    load.last_rollforward_reconcile = []
     if ing["source"] == "workbook":
         df = load_from_workbook(ing["workbook_path"], ing.get("sheet", "Input Data"),
                                 ing.get("first_data_row", 20))
@@ -656,6 +708,7 @@ def load(params) -> pd.DataFrame:
         raise ValueError(f"Unknown source {ing['source']}")
     df = _apply_corrections(df, params)
     extra = _rollforward_includes(params)
+    _reconcile_rollforward(df, params, extra)   # WARN on carried-vs-source overlap
     df = _apply_manual_includes(df, params, extra=extra)
     if (params.raw.get("s3123_rds") or {}).get("enabled"):
         df = attach_lloyds_bus_type(df, params)
