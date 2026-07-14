@@ -1038,6 +1038,15 @@ def _rds_input_template(wb, grid, s3grid, params, summary_map=None, s2grid=None)
             _cell(ws, r, 3, rid, alt=alt)
             for j, e in enumerate(ENTS):
                 col = get_column_letter(4 + j)
+                # Max Risk is NOT a Lloyd's filed RDS — the syndicate submission
+                # (Lloyd's RDS Summary / appetite check) covers only the four
+                # named RDS. Grey the S3123/S2126 Max Risk cells as N/A so the
+                # template never implies a Lloyd's Max Risk filing. (IG columns
+                # keep Max Risk — it is a group largest-single-risk metric.)
+                if e in _SYN_PREFIX and scen == "Max Risk":
+                    c = _cell(ws, r, 4 + j, None, alt=alt)
+                    c.fill = PatternFill("solid", start_color="E8E8E8")
+                    continue
                 v, is_pct, is_blank = cell_value(label, rid, scen, e)
                 a = _amounts(scen, e)
                 if label == "Gross Loss":
