@@ -163,6 +163,16 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
             summ = renewals.summarize(gaps["renewal_state"])
             print("      renewal check (lapsed): "
                   + ", ".join(f"{renewals.label(k)}={v}" for k, v in summ.items()))
+        # Per-layer movement class (renewal-aware) so the Per Layer tab can
+        # highlight new / renewed layers for the movement walk-through.
+        if "layer_key" in per_layer.columns:
+            def _keys(fr):
+                return (set(fr["layer_key"].astype(str))
+                        if fr is not None and len(fr) and "layer_key" in fr.columns else set())
+            _nk, _rk = _keys(sp["new_biz"]), _keys(sp["ren_new"])
+            per_layer = per_layer.copy()
+            per_layer["mv_class"] = per_layer["layer_key"].astype(str).map(
+                lambda k: "new" if k in _nk else "renewed" if k in _rk else "continuing")
 
     excluded = getattr(engine_mod.run_engine, "last_excluded", None)
     corrections = getattr(ingest_mod.load, "last_corrections", None)
@@ -262,6 +272,29 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
                 _wb3["S2126 RDS"].sheet_state = "hidden"
             _wb3.save(_fp2)
             print("      S2126 RDS Summary tab written; raw S2126 RDS hidden")
+
+    # Scenario Δ attribution (New / Renewals / Continuing / Run-off with named
+    # spacecraft drivers) — needs the frozen prior per-layer snapshot.
+    _prior_pl = (chg or {}).get("prior_layers")
+    if _prior_pl is not None and len(_prior_pl):
+        try:
+            from . import attribution
+            _attr = attribution.compute(per_layer, _prior_pl, chg, params)
+            if _attr:
+                import openpyxl as _opx4
+                _fpa = str(out / f"Space_RDS_results_{params.as_at}.xlsx")
+                _wba = _opx4.load_workbook(_fpa)
+                excel_report._scenario_attribution(_wba, _attr, params)
+                # position just after Change Narrative for discoverability
+                order = _wba.sheetnames
+                if "Change Narrative" in order:
+                    tgt = order.index("Change Narrative") + 1
+                    cur_i = order.index("Scenario Attribution")
+                    _wba.move_sheet("Scenario Attribution", offset=tgt - cur_i)
+                _wba.save(_fpa)
+                print("      Scenario Attribution tab written")
+        except Exception as _e:  # noqa: BLE001 - attribution tab is non-essential
+            print(f"      WARNING: Scenario Attribution skipped ({_e})")
 
     # persist this run so future quarters can diff against it
     persist.save_run(params, per_layer, summary)

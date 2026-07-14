@@ -16,7 +16,7 @@ import pandas as pd
 from . import charts_xlsx
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from openpyxl.formatting.rule import DataBarRule, CellIsRule, ColorScaleRule
+from openpyxl.formatting.rule import DataBarRule, CellIsRule, ColorScaleRule, FormulaRule
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.chart import BarChart, Reference, Series
@@ -316,9 +316,10 @@ def _breakdown(ws, r, label_field, group, total, label_w=30,
 
 # ---- Per Layer column map (for live formulas referencing the data backbone) ----
 _PL_SHEET = "Per Layer"
-_PL_KEEP = ["program_id", "layer_id", "entity", "mapping_code", "spacecraft_id",
-            "spacecraft_name", "orbit", "bus_manufacturer", "inception",
-            "off_risk_date", "rpf", "per_sc", "ext_qs", "s3123_qs", "equity_usd",
+_PL_KEEP = ["program_id", "layer_id", "entity", "mv_class", "mapping_code",
+            "spacecraft_id", "spacecraft_name", "orbit", "bus_manufacturer",
+            "inception", "off_risk_date", "rpf", "per_sc", "ext_qs", "s3123_qs",
+            "equity_usd",
             # engine's own per-layer S3123 basis — so linkify can compute s3123_qs
             # / equity EXACTLY (3-tier factor + full eligibility) instead of a
             # brittle 2-tier date reconstruction:
@@ -369,10 +370,11 @@ _FIHL_CONTRIB = {"Proton Flare": "pf_fihl", "Generic Defect": "gd_fihl",
 # flags) and is collapsed into an Excel column outline — hidden by default,
 # expandable via the +/- so nothing is lost.
 _PL_PRIMARY = {
-    "program_id", "layer_id", "entity", "mapping_code", "spacecraft_id",
-    "spacecraft_name", "orbit", "bus_manufacturer", "inception", "off_risk_date",
-    "rpf", "per_sc", "ext_qs", "s3123_qs", "equity_usd", "igr_qs_rate",
-    "igr_qs_ceded", "net_of_qs", "xol_ceded", "net_of_xol", "total_fibl_ceded",
+    "program_id", "layer_id", "entity", "mv_class", "mapping_code",
+    "spacecraft_id", "spacecraft_name", "orbit", "bus_manufacturer", "inception",
+    "off_risk_date", "rpf", "per_sc", "ext_qs", "s3123_qs", "equity_usd",
+    "igr_qs_rate", "igr_qs_ceded", "net_of_qs", "xol_ceded", "net_of_xol",
+    "total_fibl_ceded",
 }
 
 
@@ -902,6 +904,33 @@ def _rds_input_template(wb, grid, s3grid, params, summary_map=None, s2grid=None)
             return f"=IFERROR({S}{m['equity']}/{S}{m['net']},0)"
         return None
 
+    # --- syndicate columns (S3123 / S2126): LIVE =SUM over the Per Layer
+    # contribution columns, so those columns are formula-driven too (not baked).
+    # The Per Layer sheet is built just before this. Max Risk has no per-layer
+    # Lloyd's contribution column, so it falls back to the engine value.
+    _pl_cols, _pl_n = {}, 0
+    if _PL_SHEET in wb.sheetnames:
+        _plws = wb[_PL_SHEET]
+        _pl_cols = {_plws.cell(1, c).value: get_column_letter(c)
+                    for c in range(1, _plws.max_column + 1) if _plws.cell(1, c).value}
+        _pl_n = _plws.max_row
+    _SYN_PREFIX = {"S3123": "s3123", "S2126": "s2126"}
+    _SYN_SLUG = {"Proton Flare": "pf", "Space Weather": "sw",
+                 "Generic Defect": "gd", "Space Debris": "sd"}
+
+    def syn_formula(label, scen, ent, gcell, ncell):
+        pfx = _SYN_PREFIX.get(ent); slug = _SYN_SLUG.get(scen)
+        if not pfx or not slug:
+            return None
+        g = _pl_cols.get(f"{pfx}_{slug}_g"); n = _pl_cols.get(f"{pfx}_{slug}_n")
+        if label == "Gross Loss" and g:
+            return f"=SUM('{_PL_SHEET}'!${g}$2:${g}${_pl_n})"
+        if label in ("Net Loss", "Net Loss inc RIPS") and n:
+            return f"=SUM('{_PL_SHEET}'!${n}$2:${n}${_pl_n})"
+        if label == "Outwards QS Recovery" and gcell and ncell:
+            return f"={gcell}-{ncell}"          # QS to IG = gross − net (live)
+        return None
+
     r = 5
     for scen in SCEN_ORDER:
         ws.cell(row=r, column=2, value=scen).font = F_SECT
@@ -917,6 +946,7 @@ def _rds_input_template(wb, grid, s3grid, params, summary_map=None, s2grid=None)
         for col in "DEFGHI":
             ws.column_dimensions[col].width = 16
         r += 1
+        gross_row = net_row = None            # per-block anchors for syndicate QS
         for k, (label, rid) in enumerate(ROWS):
             alt = k % 2 == 0
             bold = label in ("Gross Loss", "Net Loss", "Net Loss inc RIPS")
@@ -924,7 +954,13 @@ def _rds_input_template(wb, grid, s3grid, params, summary_map=None, s2grid=None)
             _cell(ws, r, 3, rid, alt=alt)
             for j, e in enumerate(ENTS):
                 v, is_pct, is_blank = cell_value(label, rid, scen, e)
-                f = cell_formula(label, scen, e)   # live 'Summary'! ref or None
+                if e in _SYN_PREFIX:            # S3123 / S2126 → live Per Layer SUM
+                    _col = get_column_letter(4 + j)
+                    f = syn_formula(label, scen, e,
+                                    f"{_col}{gross_row}" if gross_row else None,
+                                    f"{_col}{net_row}" if net_row else None)
+                else:
+                    f = cell_formula(label, scen, e)   # live 'Summary'! ref or None
                 if is_blank:
                     c = _cell(ws, r, 4 + j, None, alt=alt)
                     c.fill = PatternFill("solid", start_color="E8E8E8")
@@ -940,13 +976,20 @@ def _rds_input_template(wb, grid, s3grid, params, summary_map=None, s2grid=None)
                     c.alignment = Alignment(horizontal="right")
                 else:
                     _cell(ws, r, 4 + j, v, alt=alt, money=True, bold=bold)
+            if label == "Gross Loss":
+                gross_row = r
+            elif label == "Net Loss":
+                net_row = r
             r += 1
         r += 2
     ws.cell(row=r, column=2,
-            value="Grey cells are not entered for the Space book (S2126 absent; "
-                  "IGR rows apply to FUL/FIID only; IG Equity % to FIHL/FIBL "
-                  "only). Values are live-data; on a frozen-extract run they tie "
-                  "the filed template to the dollar.").font = F_SUB
+            value="Every value is LIVE: IG columns link to the Summary tab; S3123 "
+                  "/ S2126 columns =SUM the Per Layer scenario contributions (QS to "
+                  "IG = gross − net). Grey cells are not entered for the Space book "
+                  "(IGR rows apply to FUL/FIID only; IG Equity % to FIHL/FIBL only; "
+                  "S3123/S2126 Max Risk is an engine value — no Lloyd's per-layer "
+                  "column). On a frozen-extract run they tie to the filed template "
+                  "to the dollar.").font = F_SUB
     ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=9)
     ws.row_dimensions[r].height = 28
     return ws
@@ -1951,6 +1994,28 @@ def _per_layer(wb, per_layer, contrib=None):
                 c.number_format = MONEY
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(keep))}{len(per_layer) + 1}"
+
+    # Movement highlight: shade the whole row by its renewal-aware class so the
+    # tab reads as a movement walk-through — new business (green), renewals
+    # (blue), continuing (unshaded). Filter on mv_class to isolate each.
+    if "mv_class" in _idx:
+        _mvL = get_column_letter(_idx["mv_class"] + 1)
+        _lastL = get_column_letter(len(keep))
+        _rng = f"A2:{_lastL}{len(per_layer) + 1}"
+        _new_fill = PatternFill("solid", fgColor="DDF0E0")   # soft green
+        _ren_fill = PatternFill("solid", fgColor="DEE9F6")   # soft blue
+        ws.conditional_formatting.add(_rng, FormulaRule(
+            formula=[f'=${_mvL}2="new"'], fill=_new_fill, stopIfTrue=False))
+        ws.conditional_formatting.add(_rng, FormulaRule(
+            formula=[f'=${_mvL}2="renewed"'], fill=_ren_fill, stopIfTrue=False))
+        _note(ws.cell(row=1, column=_idx["mv_class"] + 1),
+              "Renewal-aware movement class (this quarter vs prior filing):\n"
+              "• new = genuine new business (row shaded green)\n"
+              "• renewed = renewal of a prior spacecraft, incl. onto a new "
+              "programme id (row shaded blue)\n"
+              "• continuing = same layer on both books.\n"
+              "Filter this column to isolate each. Lapsed layers are off the "
+              "current book — see Book Movement.")
 
 
 
@@ -3845,6 +3910,214 @@ def _s3123_ig_addons(wb, grid, params, per_layer=None):
     return {"sheet": ws.title, "fihl": fihl_ref}
 
 
+# Netting-down-walk waterfall (JJ's underwriter sign-off format): one chart per
+# entity × scenario. Categories & their kind, in the exact filed order.
+_NDW_CATS = [("Gross", "total"), ("Outwards QS", "down"), ("Net of QS", "total"),
+             ("XoL Recovery", "down"), ("Outwards RIPS", "up"),
+             ("Net of XoL", "total"), ("IGR QS", "down"), ("IGR XoL", "down"),
+             ("Net Loss", "total"), ("Net Loss Inc RIPS", "total"),
+             ("IG Equity Share", "up"), ("Final Net Loss", "total")]
+_NDW_ENTS = ["FIHL", "FUL", "FIID", "FIBL", "S3123", "S2126"]
+
+
+def _ndw_values(entity, scen, grid, s3grid, s2grid):
+    """The 12 walk levels/deltas for one entity × scenario, from the engine
+    grids — same numbers as the Summary / RDS Input Template.
+
+    IG entities net Gross → Outwards QS → (IGR QS/XoL) → Net Loss, then add back
+    the IG Equity share (FIHL/FIBL). FIHL uses its EX-add-on gross/net (the S3123
+    inwards QS is a separate arrangement, shown on the S3123 walk). Syndicates:
+    S3123 cedes its QS to IG as the Outwards QS; S2126 has none (net = gross)."""
+    def _row(g, ent):
+        if g is None or not len(g):
+            return None
+        b = g[(g["entity"] == ent) & (g["scenario"] == scen)] if "entity" in g.columns \
+            else g[g["scenario"] == scen]
+        return b.iloc[0] if len(b) else None
+
+    if entity in ("S3123", "S2126"):
+        row = _row(s3grid if entity == "S3123" else s2grid, entity)
+        gr = float(row.get("gross") or 0) if row is not None else 0.0
+        nt = float(row.get("net") or 0) if row is not None else 0.0
+        oqs = gr - nt                       # syndicate QS ceded to IG (0 for S2126)
+        return {"Gross": gr, "Outwards QS": -oqs, "Net of QS": nt,
+                "XoL Recovery": 0.0, "Outwards RIPS": 0.0, "Net of XoL": nt,
+                "IGR QS": 0.0, "IGR XoL": 0.0, "Net Loss": nt,
+                "Net Loss Inc RIPS": nt, "IG Equity Share": 0.0,
+                "Final Net Loss": nt}
+    row = _row(grid, entity)
+    if row is None:
+        return None
+    gr = float(row.get("gross") or 0)
+    oqs = float(row.get("ext_qs") or 0)
+    iqs = float(row.get("igr_qs_ceded") or 0)
+    ixol = float(row.get("xol_ceded") or 0)
+    eq = float(row.get("equity_usd") or 0)
+    net_of_qs = gr - oqs
+    net_loss = net_of_qs - iqs - ixol       # ex-add-on net (FIHL) / net (FUL/FIID)
+    return {"Gross": gr, "Outwards QS": -oqs, "Net of QS": net_of_qs,
+            "XoL Recovery": 0.0, "Outwards RIPS": 0.0, "Net of XoL": net_of_qs,
+            "IGR QS": -iqs, "IGR XoL": -ixol, "Net Loss": net_loss,
+            "Net Loss Inc RIPS": net_loss, "IG Equity Share": eq,
+            "Final Net Loss": net_loss + eq}
+
+
+def _ndw_block(ws, r0, entity, scen, vals):
+    """One backing table (cols B-G) + waterfall chart (anchored col I)."""
+    from openpyxl.chart.legend import LegendEntry
+    ttl = f"Contingency RDS Netting Down Walk — {entity} · {scen}"
+    ws.cell(r0, 2, ttl).font = F_SECT
+    hr = r0 + 1
+    for j, h in enumerate(["Category", "Value", "Base", "Decrease", "Increase", "Total"]):
+        c = ws.cell(hr, 2 + j, h); c.font = F_HDR; c.fill = FILL_HDR
+        c.alignment = Alignment(horizontal="left" if j == 0 else "center")
+    first = hr + 1
+    running = 0.0
+    for i, (cat, kind) in enumerate(_NDW_CATS):
+        rr = first + i
+        v = float(vals.get(cat) or 0.0)
+        base = down = up = tot = None
+        if kind == "total":
+            base, tot = 0.0, v; running = v
+        elif kind == "down":
+            base, down = running + v, -v; running = running + v
+        else:  # up
+            base, up = running, v; running = running + v
+        ws.cell(rr, 2, cat).font = F_CELL
+        _cell(ws, rr, 3, v, money=True)                 # signed source (audit)
+        _cell(ws, rr, 4, base, money=True)
+        if down is not None:
+            _cell(ws, rr, 5, down, money=True)
+        if up is not None:
+            _cell(ws, rr, 6, up, money=True)
+        if tot is not None:
+            _cell(ws, rr, 7, tot, money=True)
+    last = first + len(_NDW_CATS) - 1
+
+    ch = BarChart(); ch.type = "col"; ch.grouping = "stacked"; ch.overlap = 100
+    ch.gapWidth = 30; ch.title = ttl; ch.height = 8.0; ch.width = 17.5
+    ch.y_axis.numFmt = '#,##0,,"m"'; ch.y_axis.title = "$"
+    ch.x_axis.delete = False; ch.y_axis.delete = False
+    cats = Reference(ws, min_col=2, min_row=first, max_row=last)
+    for col in (4, 5, 6, 7):                            # Base, Decrease, Increase, Total
+        ch.add_data(Reference(ws, min_col=col, min_row=hr, max_row=last),
+                    titles_from_data=True)
+    ch.set_categories(cats)
+    s_base, s_down, s_up, s_tot = ch.series
+    s_base.graphicalProperties = GraphicalProperties()
+    s_base.graphicalProperties.noFill = True
+    s_base.graphicalProperties.line.noFill = True
+    s_down.graphicalProperties = GraphicalProperties(solidFill="ED7D31")   # orange
+    s_up.graphicalProperties = GraphicalProperties(solidFill="1F4E79")     # blue
+    s_tot.graphicalProperties = GraphicalProperties(solidFill="2E7D32")    # green
+    for s in (s_down, s_up, s_tot):
+        s.dLbls = DataLabelList(); s.dLbls.showVal = True
+        s.dLbls.numFmt = '#,##0,,"m"'
+    ch.legend.position = "t"
+    ch.legend.legendEntry = [LegendEntry(idx=0, delete=True)]  # hide the Base series
+    ch.plotVisOnly = False
+    ws.add_chart(ch, f"I{r0}")
+    return last
+
+
+def _netting_down_walk(wb, grid, s3grid, s2grid, params):
+    """'Netting Down Walk' tab — JJ's underwriter sign-off waterfall, one chart
+    per entity × scenario (all five RDS × all six entities). Backing tables in
+    cols B-G (scaffolding D-G hidden), charts on the right."""
+    ws = wb.create_sheet("Netting Down Walk")
+    ws.sheet_view.showGridLines = False
+    _title(ws, "Contingency RDS — Netting Down Walk",
+           f"as-at {params.as_at} · one waterfall per entity × scenario · Gross → "
+           f"Outwards QS → IGR → Net Loss → IG Equity → Final Net Loss · ties to "
+           f"the Summary / RDS Input Template")
+    ws.column_dimensions["B"].width = 20
+    ws.column_dimensions["C"].width = 15
+    r = 5
+    for entity in _NDW_ENTS:
+        _section(ws, r, entity)
+        r += 1
+        for scen in SCEN_ORDER:
+            vals = _ndw_values(entity, scen, grid, s3grid, s2grid)
+            if vals is None:
+                continue
+            _ndw_block(ws, r, entity, scen, vals)
+            r += 17
+        r += 1
+    for col in ("D", "E", "F", "G"):                    # chart scaffolding
+        ws.column_dimensions[col].hidden = True
+    return ws
+
+
+def _scenario_attribution(wb, attr, params):
+    """'Scenario Attribution' tab — each entity × scenario gross Δ split into
+    New / Renewals / Continuing / Run-off (they sum to the Δ exactly), with the
+    top named spacecraft drivers per bucket for the input-template write-up."""
+    ws = wb.create_sheet("Scenario Attribution")
+    ws.sheet_view.showGridLines = False
+    _title(ws, "Scenario movement attribution — Q-on-Q gross",
+           f"as-at {params.as_at} · each entity × scenario Δ decomposed into "
+           f"New − Run-off ± Renewals ± Continuing (sums to the Δ), with the top "
+           f"named spacecraft in each — paste-ready detail for the input template")
+    for col, w in zip("BCDEFGHI", [17, 14, 14, 13, 13, 13, 13, 13]):
+        ws.column_dimensions[col].width = w
+
+    def _m(v):
+        return f"{'+' if v >= 0 else '−'}${abs(float(v)) / 1e6:,.1f}m"
+
+    def _drv(lst):
+        return ", ".join(f"{n} {_m(v)}" for n, v in lst)
+
+    r = 5
+    for ent in ["FIHL", "FUL", "FIID"]:
+        rows = [(scen, attr[(ent, scen)]) for scen in SCEN_ORDER
+                if (ent, scen) in attr]
+        if not rows:
+            continue
+        _section(ws, r, ent); r += 1
+        r = _hdr(ws, r, 2, ["Scenario", "Prior", "Current", "Δ gross", "+ New",
+                            "↻ Renewals", "± Continuing", "− Run-off"],
+                 [17, 14, 14, 13, 13, 13, 13, 13])
+        for scen, d in rows:
+            b = d["buckets"]; alt = SCEN_ORDER.index(scen) % 2 == 0
+            _cell(ws, r, 2, scen, alt=alt, bold=True)
+            _cell(ws, r, 3, d["prior"], alt=alt, money=True)
+            _cell(ws, r, 4, d["cur"], alt=alt, money=True)
+            _cell(ws, r, 5, d["delta"], alt=alt, money=True, bold=True)
+            _cell(ws, r, 6, b["new"], alt=alt, money=True)
+            _cell(ws, r, 7, b["renewals"], alt=alt, money=True)
+            _cell(ws, r, 8, b["continuing"], alt=alt, money=True)
+            _cell(ws, r, 9, b["lapsed"], alt=alt, money=True)
+            r += 1
+            parts = []
+            for lbl, key in (("New", "new"), ("Run-off", "lapsed"),
+                             ("Renewals", "renewals"), ("Continuing", "continuing")):
+                dr = d["drivers"].get(key) or []
+                if dr:
+                    parts.append(f"{lbl}: " + _drv(dr[:3]))
+            txt = "   ▸ " + "   ·   ".join(parts) if parts else "   ▸ (no material drivers)"
+            c = ws.cell(r, 2, txt); c.font = F_SUB
+            c.alignment = Alignment(wrap_text=True, vertical="top")
+            ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=9)
+            ws.row_dimensions[r].height = 42
+            r += 1
+        r += 1
+
+    n = ws.cell(r, 2, (
+        "How to read: the four buckets sum to the Δ exactly (every spacecraft is "
+        "in one bucket). New = spacecraft new to the book; Run-off = spacecraft "
+        "gone; Renewals = a prior spacecraft rewritten (incl. onto a new "
+        "programme id), current vs prior size; Continuing = same layer both "
+        "quarters (reval / RPF, and — for Space Weather / Max Risk — a bird "
+        "moving into or out of the binding selection). The named $ are that "
+        "spacecraft's contribution to THIS scenario, so paste them straight into "
+        "the template. IG entities shown; FIBL is a receiver and S3123/S2126 net "
+        "to their own tabs. Gross basis (FIHL ex add-ons)."))
+    n.font = F_SUB; n.alignment = Alignment(wrap_text=True, vertical="top")
+    ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=9)
+    ws.row_dimensions[r].height = 74
+    return ws
+
+
 def write_results(path, per_layer, sw, mr, grid, params, source,
                   recon=None, changes=None, excluded=None,
                   corrections=None, manual_includes=None,
@@ -3945,6 +4218,10 @@ def write_results(path, per_layer, sw, mr, grid, params, source,
     _per_layer(wb, per_layer, contrib=_contrib)
     _rds_input_template(wb, grid, s3123_grid, params, summary_map,
                         s2grid=s2126_grid)   # paste-ready regulator block
+    try:
+        _netting_down_walk(wb, grid, s3123_grid, s2126_grid, params)
+    except Exception as _e:  # noqa: BLE001 - a chart tab is non-essential
+        print(f"      WARNING: Netting Down Walk tab skipped ({_e})")
     if s3123_grid is not None and len(s3123_grid):
         from .s3123_sheet import write_s3123_sheet
         write_s3123_sheet(wb, s3123_grid, recon=s3123_recon,
@@ -3953,7 +4230,7 @@ def write_results(path, per_layer, sw, mr, grid, params, source,
     if "Sheet" in wb.sheetnames:
         del wb["Sheet"]
     order = ["Cover", "Executive Summary", "Summary", "RDS Input Template",
-             "S3123 & Equity (IG)", "S3123 RDS", "Charts",
+             "S3123 & Equity (IG)", "S3123 RDS", "Netting Down Walk", "Charts",
              "Changes", "Change Narrative", "Book Movement",
              "WF · Exposure Bridge", "WF · Loss Movement",
              "Portfolio", "Netting Waterfalls", "Space Weather", "Max Risk",
@@ -3963,7 +4240,8 @@ def write_results(path, per_layer, sw, mr, grid, params, source,
                     if s.title in order else 99)
     # print hygiene + autofit on every sheet
     _no_autofit = {"Charts", "Cover", "Executive Summary", "Changes",
-                   "WF · Exposure Bridge", "WF · Loss Movement"}
+                   "WF · Exposure Bridge", "WF · Loss Movement",
+                   "Netting Down Walk"}
     for ws in wb.worksheets:
         try:
             _print_setup(ws, params, ws.title)
