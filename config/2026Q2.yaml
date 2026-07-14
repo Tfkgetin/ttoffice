@@ -38,6 +38,22 @@ prior_as_at_label: "2026-04-01 (2026Q1 filed manual)"
 # NOT here — the 4 hand entries below are disabled (superseded) and kept only for
 # reference; delete once the roll-forward is trusted.
 manual_include:
+  # HELLAS-SAT 4 (9775) — bound Consortium GEO layers that the extract DROPPED
+  # (no MGU consortium split covers their 2026-07-01 inception) and that no
+  # renewal_rollforward carried; the coverage audit flagged programme 382815 as
+  # the sole miss. Only the two 9775 layers are added: HELLAS-SAT 3 (7353) is
+  # already in the book under the Inmarsat GX carry (385466), so including it too
+  # would double-count. ASSUMPTIONS TO CONFIRM WITH UW:
+  #   * entity = FUL (matches HELLAS-SAT 3's placement in the current book)
+  #   * layer_signed_exposure = the SOURCE signed line ($1.35m/layer), GROSS of
+  #     any MGU consortium cession — the true ceded line is unknown because the
+  #     split row is missing. Conservative (overstates), which is the safe
+  #     direction for an RDS.
+  # PROPER FIX: add the MGU split for the 2026-07-01 period so 382815 flows from
+  # source at its true ceded line, then DELETE these two entries.
+  - {program_id: 382815, layer_id: 535032, spacecraft_id: 9775, spacecraft_name: "HELLAS-SAT 4/SAUDIGEOSAT-1", entity: FUL, mapping_code: ASO, orbit: GEO-GSO, is_consortium: true, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 1352027.84, renewal_uw_status: "Bound", renewal_snapshot: "2026-07-14", reason: "HELLAS-SAT 4 (9775) L535032 — dropped by MGU split gate; coverage-audit miss. entity=FUL & source line to confirm with UW"}
+  - {program_id: 382815, layer_id: 535034, spacecraft_id: 9775, spacecraft_name: "HELLAS-SAT 4/SAUDIGEOSAT-1", entity: FUL, mapping_code: ASO, orbit: GEO-GSO, is_consortium: true, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 1352027.84, renewal_uw_status: "Bound", renewal_snapshot: "2026-07-14", reason: "HELLAS-SAT 4 (9775) L535034 — dropped by MGU split gate; coverage-audit miss. entity=FUL & source line to confirm with UW"}
+  # --- disabled reference entries (Eutelsat now via renewal_rollforward) ---
   # - {program_id: 385575, layer_id: 1,  spacecraft_id: 16310, spacecraft_name: "EUTELSAT 36D", entity: FIID, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Airbus Defence and Space",             is_consortium: false, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 19814782.42, renewed_from_program_id: 344558, renewal_uw_status: "Quoted/Awaiting FOT", renewal_snapshot: "2026-07-05", reason: "Eutelsat 36D renewal — superseded by renewal_rollforward"}
   # - {program_id: 385575, layer_id: 20, spacecraft_id: 13009, spacecraft_name: "E13G",         entity: FIID, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Airbus Defence and Space (Toulouse)",  is_consortium: false, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 19814782.42, renewed_from_program_id: 344558, renewal_uw_status: "Quoted/Awaiting FOT", renewal_snapshot: "2026-07-05", reason: "Eutelsat E13G renewal — superseded by renewal_rollforward"}
   # - {program_id: 385575, layer_id: 22, spacecraft_id: 14159, spacecraft_name: "E10B",         entity: FIID, mapping_code: ASO, orbit: GEO-GSO, bus_manufacturer: "Thales Alenia Space France (Cannes)", is_consortium: false, inception: "2026-07-01", on_risk_date: "2026-07-01", off_risk_date: "2027-06-30", layer_signed_exposure: 19814782.42, renewed_from_program_id: 344558, renewal_uw_status: "Quoted/Awaiting FOT", renewal_snapshot: "2026-07-05", reason: "Eutelsat E10B renewal — superseded by renewal_rollforward"}
@@ -337,6 +353,10 @@ ingest:
     server: LON-SQLP-V005
     database: SpaceTrax_Data
     query_file: sql/space_rds_onrisk_asat.sql
+    # Standing completeness audit — every bound in-scope layer the
+    # extract could silently drop (missing MGU split); the pipeline
+    # flags any that are dropped AND not carried. Optional; SQL-only.
+    coverage_query_file: sql/coverage_check.sql
     # Renewal-policy check: forward renewal pointers from the PBI layer snapshot
     # (J.Pbi.Layers_t), used to classify the quarter's lapsed layers as
     # renewed-bound / in-progress / NTU-Declined / no-pointer. Optional — remove

@@ -506,6 +506,113 @@ def check_consortium_split_coverage(params):
     return None
 
 
+def coverage_audit(params, df):
+    """Standing completeness audit (SQL-only, never raises).
+
+    `check_consortium_split_coverage` says *whether* the MGU split table is stale;
+    this says *which* specific bound, in-scope layers fell through as a result and
+    are NOT in the final book — i.e. potential MISSES you'd otherwise only find by
+    hand. Reads sql/coverage_check.sql (every in-scope bound layer + has_mgu_split
+    flag), then flags each row that the extract silently dropped
+    (has_mgu_split = 0) whose programme is not represented in `df` (the final book,
+    which already includes every roll-forward / manual_include). Result on
+    load.last_coverage_audit; returns the list."""
+    load.last_coverage_audit = []
+    ing = getattr(params, "ingest", {}) or {}
+    if ing.get("source") != "sql":
+        return []
+    sql_cfg = dict(ing.get("sql") or {})
+    qf = sql_cfg.get("coverage_query_file")
+    if not qf:
+        return []
+    try:
+        import pyodbc  # noqa: F401
+        from pathlib import Path
+        driver = sql_cfg.get("driver") or _pick_driver()
+        conn = (f"DRIVER={{{driver}}};SERVER={sql_cfg['server']};"
+                f"DATABASE={sql_cfg['database']};Trusted_Connection=yes;")
+        if "18" in str(driver):
+            conn += "TrustServerCertificate=yes;"
+        cn = pyodbc.connect(conn, timeout=30)
+        q = Path(qf).read_text().format(as_at=str(getattr(params, "as_at", "")))
+        cov = pd.read_sql(q, cn)
+        cn.close()
+    except Exception as e:  # noqa: BLE001 — optional audit, never break the run
+        print(f"      coverage audit: skipped ({type(e).__name__}: {e})")
+        return []
+    cov = cov.rename(columns={c: _norm(c) for c in cov.columns})
+    ren = {"programid": "program_id", "layerid": "layer_id",
+           "spacecraftid": "spacecraft_id", "spacecraftname": "spacecraft_name",
+           "controllingbody": "controlling_body", "hasmgusplit": "has_mgu_split",
+           "signedexposureusd": "signed_exposure_usd"}
+    cov = cov.rename(columns={k: v for k, v in ren.items() if k in cov.columns})
+    if "program_id" not in cov.columns or "has_mgu_split" not in cov.columns:
+        return []
+    represented = (set(df["program_id"].dropna().astype(str))
+                   if df is not None and "program_id" in df.columns else set())
+    miss = cov[(pd.to_numeric(cov["has_mgu_split"], errors="coerce") == 0)
+               & (~cov["program_id"].astype(str).isin(represented))].copy()
+    out = []
+    for _, r in miss.iterrows():
+        out.append({k: r.get(k) for k in
+                    ("program_id", "layer_id", "controlling_body", "orbit",
+                     "spacecraft_id", "spacecraft_name", "programme",
+                     "inception", "signed_exposure_usd")})
+    load.last_coverage_audit = out
+    if out:
+        tot = sum(float(m.get("signed_exposure_usd") or 0) for m in out)
+        progs = sorted({str(m["program_id"]) for m in out})
+        print(f"      ⚠  coverage audit: {len(out)} bound in-scope layer(s) "
+              f"(${tot:,.0f}) DROPPED by the extract and NOT in the book — "
+              f"potential MISSES across {len(progs)} programme(s): "
+              f"{', '.join(progs)}")
+        print("         (no MGU consortium split for their inception; add the "
+              "split row or carry via renewal_rollforward / manual_include)")
+    return out
+
+
+def null_orbit_audit(df):
+    """Second completeness dimension (works in every ingest mode — operates on the
+    engine output, not SQL).
+
+    A layer with no orbit is still IN the book (exposure / netting) but is
+    invisible to every orbit-based RDS scenario — Proton Flare (GEO), Space Debris
+    (LEO), Generic Defect (GEO/MEO) all gate on `orbit`. So it is silently left
+    out of the scenario *selection*. Most such layers are legitimately
+    non-satellite structures (TLO / launch / consortium aggregates); a real
+    GEO/LEO bird whose orbit failed to resolve is a genuine under-count. Advisory:
+    reports only. Only ON-RISK layers are flagged (pre-launch rows legitimately
+    have no orbit yet). Result on load.last_null_orbit_audit; returns the list."""
+    load.last_null_orbit_audit = []
+    if df is None or not len(df) or "orbit" not in df.columns:
+        return []
+    onr = df
+    if "on_risk_flag" in df.columns:
+        onr = df[pd.to_numeric(df["on_risk_flag"], errors="coerce").fillna(0) == 1]
+    if "excluded_reason" in onr.columns:            # skip already-excluded rows
+        onr = onr[onr["excluded_reason"].isna()]
+    orbit = onr["orbit"].astype("string").str.strip()
+    blank = orbit.isna() | orbit.eq("") | orbit.str.lower().isin(["none", "nan", "null"])
+    hit = onr[blank]
+    if not len(hit):
+        return []
+    keep = [c for c in ("program_id", "layer_id", "entity", "is_consortium",
+                        "spacecraft_id", "spacecraft_name", "program_name",
+                        "inception", "layer_signed_exposure", "per_sc")
+            if c in hit.columns]
+    out = hit[keep].to_dict("records")
+    load.last_null_orbit_audit = out
+    expcol = "per_sc" if "per_sc" in hit.columns else "layer_signed_exposure"
+    exp = pd.to_numeric(hit.get(expcol), errors="coerce").fillna(0).sum() \
+        if expcol in hit.columns else 0.0
+    progs = sorted({str(r.get("program_id")) for r in out})
+    print(f"      ⚠  orbit audit: {len(out)} on-risk layer(s) (${exp:,.0f}) have NO "
+          f"orbit — in the book but OUTSIDE the orbit scenarios (Proton / Space "
+          f"Debris / Generic Defect). Review {len(progs)} programme(s): "
+          f"{', '.join(progs[:15])}{' …' if len(progs) > 15 else ''}")
+    return out
+
+
 def _rollforward_dicts(prior, rules):
     """Turn `renewal_rollforward` rules into manual_include dicts by cloning the
     prior book's layers for each `from_program` into `to_program` at the renewal
@@ -638,10 +745,62 @@ def _apply_manual_includes(df, params, extra=None):
     return out
 
 
+def _reconcile_rollforward(source_df, params, extra):
+    """Reconcile CARRIED renewals (renewal_rollforward + manual_include) against
+    what the SOURCE extract already bound, and WARN on any overlap the per-bird
+    safeguard in `_apply_manual_includes` cannot catch.
+
+    The per-bird safeguard dedups on layer_key / spacecraft_id, so it is blind to
+    a source row that carries the SAME programme but with a NULL spacecraft_id
+    (e.g. an ARABSAT / Eutelsat 'Fleet IO — Top Layer' aggregate). When that
+    happens the roll-forward birds and the source aggregate can BOTH survive →
+    double-count, or the source aggregate lands NULL-orbit and misses the GEO
+    scenarios. Non-destructive: this only reports (retiring a carry rule that
+    still supplies per-bird orbit detail could silently drop exposure — the
+    analyst decides). Stored on load.last_rollforward_reconcile.
+    """
+    load.last_rollforward_reconcile = []
+    if source_df is None or "program_id" not in source_df.columns:
+        return
+    src_pids = set(source_df["program_id"].dropna().astype(str))
+    carried = {}
+    for r in (params.raw.get("renewal_rollforward") or []):
+        if r.get("to_program") is not None:
+            carried.setdefault(str(r["to_program"]), "renewal_rollforward")
+    for g in (extra or []):
+        if g.get("program_id") is not None:
+            carried.setdefault(str(g["program_id"]), "renewal_rollforward")
+    for it in (params.raw.get("manual_include") or []):
+        if it.get("program_id") is not None:
+            carried.setdefault(str(it["program_id"]), "manual_include")
+    hits = []
+    for pid, kind in carried.items():
+        if pid not in src_pids:
+            continue                       # carried and NOT in source → correct
+        sub = source_df[source_df["program_id"].astype(str) == pid]
+        named = int(sub["spacecraft_id"].notna().sum()) if "spacecraft_id" in sub else 0
+        hits.append({"program_id": pid, "carried_by": kind,
+                     "source_layers": int(len(sub)), "source_per_bird": named,
+                     "source_null_spacecraft": int(len(sub) - named)})
+    load.last_rollforward_reconcile = hits
+    if hits:
+        print(f"      ⚠  renewal reconcile: {len(hits)} carried programme(s) also "
+              f"present in the source feed — verify no double-count:")
+        for h in hits:
+            print(f"         · programme {h['program_id']} ({h['carried_by']}): "
+                  f"source has {h['source_layers']} layer(s) "
+                  f"[{h['source_per_bird']} per-bird, "
+                  f"{h['source_null_spacecraft']} NULL-spacecraft]. "
+                  "Per-bird rows are deduped by the safeguard; NULL-spacecraft "
+                  "aggregates are NOT — retire the carry rule or exclude the "
+                  "source aggregate.")
+
+
 def load(params) -> pd.DataFrame:
     ing = params.ingest
     load.last_corrections = []
     load.last_manual_includes = []
+    load.last_rollforward_reconcile = []
     if ing["source"] == "workbook":
         df = load_from_workbook(ing["workbook_path"], ing.get("sheet", "Input Data"),
                                 ing.get("first_data_row", 20))
@@ -656,6 +815,7 @@ def load(params) -> pd.DataFrame:
         raise ValueError(f"Unknown source {ing['source']}")
     df = _apply_corrections(df, params)
     extra = _rollforward_includes(params)
+    _reconcile_rollforward(df, params, extra)   # WARN on carried-vs-source overlap
     df = _apply_manual_includes(df, params, extra=extra)
     if (params.raw.get("s3123_rds") or {}).get("enabled"):
         df = attach_lloyds_bus_type(df, params)
