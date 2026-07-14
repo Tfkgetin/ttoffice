@@ -118,6 +118,16 @@ def main():
     print("[2/7] Engine…")
     df = engine.run_engine(df, p)
 
+    # Orbit-completeness audit: on-risk layers with no orbit are in the book but
+    # outside every orbit-based scenario. Advisory; persist to CSV.
+    orb_gap = ingest.null_orbit_audit(df)
+    if orb_gap:
+        import os as _os, pandas as _pd
+        _os.makedirs(outdir, exist_ok=True)
+        _pd.DataFrame(orb_gap).to_csv(_os.path.join(outdir, "null_orbit_layers.csv"),
+                                      index=False)
+        print(f"      → wrote {outdir}/null_orbit_layers.csv ({len(orb_gap)} layer(s))")
+
     sql_cols = [c for c in df.columns if c.startswith("sql_")]
     if sql_cols:
         import pandas as pd

@@ -571,6 +571,48 @@ def coverage_audit(params, df):
     return out
 
 
+def null_orbit_audit(df):
+    """Second completeness dimension (works in every ingest mode — operates on the
+    engine output, not SQL).
+
+    A layer with no orbit is still IN the book (exposure / netting) but is
+    invisible to every orbit-based RDS scenario — Proton Flare (GEO), Space Debris
+    (LEO), Generic Defect (GEO/MEO) all gate on `orbit`. So it is silently left
+    out of the scenario *selection*. Most such layers are legitimately
+    non-satellite structures (TLO / launch / consortium aggregates); a real
+    GEO/LEO bird whose orbit failed to resolve is a genuine under-count. Advisory:
+    reports only. Only ON-RISK layers are flagged (pre-launch rows legitimately
+    have no orbit yet). Result on load.last_null_orbit_audit; returns the list."""
+    load.last_null_orbit_audit = []
+    if df is None or not len(df) or "orbit" not in df.columns:
+        return []
+    onr = df
+    if "on_risk_flag" in df.columns:
+        onr = df[pd.to_numeric(df["on_risk_flag"], errors="coerce").fillna(0) == 1]
+    if "excluded_reason" in onr.columns:            # skip already-excluded rows
+        onr = onr[onr["excluded_reason"].isna()]
+    orbit = onr["orbit"].astype("string").str.strip()
+    blank = orbit.isna() | orbit.eq("") | orbit.str.lower().isin(["none", "nan", "null"])
+    hit = onr[blank]
+    if not len(hit):
+        return []
+    keep = [c for c in ("program_id", "layer_id", "entity", "is_consortium",
+                        "spacecraft_id", "spacecraft_name", "program_name",
+                        "inception", "layer_signed_exposure", "per_sc")
+            if c in hit.columns]
+    out = hit[keep].to_dict("records")
+    load.last_null_orbit_audit = out
+    expcol = "per_sc" if "per_sc" in hit.columns else "layer_signed_exposure"
+    exp = pd.to_numeric(hit.get(expcol), errors="coerce").fillna(0).sum() \
+        if expcol in hit.columns else 0.0
+    progs = sorted({str(r.get("program_id")) for r in out})
+    print(f"      ⚠  orbit audit: {len(out)} on-risk layer(s) (${exp:,.0f}) have NO "
+          f"orbit — in the book but OUTSIDE the orbit scenarios (Proton / Space "
+          f"Debris / Generic Defect). Review {len(progs)} programme(s): "
+          f"{', '.join(progs[:15])}{' …' if len(progs) > 15 else ''}")
+    return out
+
+
 def _rollforward_dicts(prior, rules):
     """Turn `renewal_rollforward` rules into manual_include dicts by cloning the
     prior book's layers for each `from_program` into `to_program` at the renewal
