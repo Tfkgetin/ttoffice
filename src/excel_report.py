@@ -931,6 +931,89 @@ def _rds_input_template(wb, grid, s3grid, params, summary_map=None, s2grid=None)
             return f"={gcell}-{ncell}"          # QS to IG = gross − net (live)
         return None
 
+    # --- Self-contained scenario cascade -------------------------------------
+    # Only Gross Loss links out (Summary / Per Layer). Every other row is an
+    # in-tab formula that nets Gross down using this entity's cession
+    # parameters, so within each scenario block Gross → Net → recoveries all
+    # derive from the one gross cell. Rates are calibrated to the engine grid
+    # (recovery $ / base $), so the cascaded Net ties to the filed net exactly;
+    # the IGR XoL row uses the real deductible/limit params as a live cap.
+    _CALC = {"Net Loss", "Net Loss inc RIPS", "Outwards QS Recovery",
+             "Facultative RI Recovery", "IGR QS Recovery", "IGR XOL Recovery"}
+    _xol_terms = getattr(params, "igr_xol", {}) or {}
+
+    def _xt(ent):
+        t = _xol_terms.get(ent)
+        return (float(t["deductible"]), float(t["limit"])) if t else None
+
+    def _amounts(scen, ent):
+        """Per (scenario, entity) engine amounts: gross, net and each recovery
+        ($). Returns None when the entity is absent from the scenario grid."""
+        if ent in ("S3123", "S2126"):
+            sg = s3grid if ent == "S3123" else s2grid
+            g = _synval(sg, scen, "gross"); n = _synval(sg, scen, "net")
+            if g is None and n is None:
+                return None
+            g = g or 0.0; n = n if n is not None else g
+            return {"G": g, "N": n, "ext": g - n, "other": 0.0,
+                    "igrqs": 0.0, "xol": 0.0, "equity": 0.0}
+        b = grid[(grid.entity == ent) & (grid.scenario == scen)]
+        if not len(b):
+            return None
+        row = b.iloc[0]
+        G = _display_gross(row); N = _display_net(row) or 0.0
+        if ent in ("FUL", "FIID"):
+            ext = float(row.get("ext_qs") or 0.0)
+            other = float(row.get("other_ext_ri") or 0.0)
+            igrqs = float(row.get("igr_qs_ceded") or 0.0)
+            xol = float(row.get("xol_ceded") or 0.0)
+        else:                                   # FIHL / FIBL: single QS step
+            ext, other, igrqs, xol = (G - N), 0.0, 0.0, 0.0
+        return {"G": G, "N": N, "ext": ext, "other": other, "igrqs": igrqs,
+                "xol": xol, "equity": float(row.get("equity_usd") or 0.0)}
+
+    def _num(x):
+        return f"{x:.12g}"
+
+    def _derived(label, ent, col, LR, a):
+        """Inline cascade formula (or number) for a calculated row. References
+        the entity's own column cells by the block's label→row map (LR)."""
+        G = a["G"]
+
+        def C(lbl):
+            return f"{col}{LR[lbl]}"
+
+        if label == "Net Loss":
+            return (f"={C('Gross Loss')}-{C('Outwards QS Recovery')}"
+                    f"-{C('Facultative RI Recovery')}-{C('IGR QS Recovery')}"
+                    f"-{C('IGR XOL Recovery')}")
+        if label == "Net Loss inc RIPS":
+            return f"={C('Net Loss')}"
+        if label == "Outwards QS Recovery":
+            r_ext = (a["ext"] / G) if G else 0.0
+            return f"={C('Gross Loss')}*{_num(r_ext)}"
+        if label == "Facultative RI Recovery":
+            base = G - a["ext"]
+            r_o = (a["other"] / base) if base else 0.0
+            if not r_o:
+                return 0.0
+            return (f"=({C('Gross Loss')}-{C('Outwards QS Recovery')})"
+                    f"*{_num(r_o)}")
+        if label == "IGR QS Recovery":            # FUL/FIID only (else grey)
+            base = G - a["ext"] - a["other"]
+            r_q = (a["igrqs"] / base) if base else 0.0
+            return (f"=({C('Gross Loss')}-{C('Outwards QS Recovery')}"
+                    f"-{C('Facultative RI Recovery')})*{_num(r_q)}")
+        if label == "IGR XOL Recovery":           # FUL/FIID only (else grey)
+            t = _xt(ent)
+            base = (f"({C('Gross Loss')}-{C('Outwards QS Recovery')}"
+                    f"-{C('Facultative RI Recovery')}-{C('IGR QS Recovery')})")
+            if not t:
+                return 0.0
+            ded, lim = t
+            return f"=MAX(0,MIN({base}-{_num(ded)},{_num(lim)}))"
+        return 0.0
+
     r = 5
     for scen in SCEN_ORDER:
         ws.cell(row=r, column=2, value=scen).font = F_SECT
@@ -946,50 +1029,54 @@ def _rds_input_template(wb, grid, s3grid, params, summary_map=None, s2grid=None)
         for col in "DEFGHI":
             ws.column_dimensions[col].width = 16
         r += 1
-        gross_row = net_row = None            # per-block anchors for syndicate QS
+        data_start = r
+        LR = {label: data_start + k for k, (label, _rid) in enumerate(ROWS)}
         for k, (label, rid) in enumerate(ROWS):
             alt = k % 2 == 0
             bold = label in ("Gross Loss", "Net Loss", "Net Loss inc RIPS")
             _cell(ws, r, 2, label, alt=alt, bold=bold)
             _cell(ws, r, 3, rid, alt=alt)
             for j, e in enumerate(ENTS):
+                col = get_column_letter(4 + j)
                 v, is_pct, is_blank = cell_value(label, rid, scen, e)
-                if e in _SYN_PREFIX:            # S3123 / S2126 → live Per Layer SUM
-                    _col = get_column_letter(4 + j)
-                    f = syn_formula(label, scen, e,
-                                    f"{_col}{gross_row}" if gross_row else None,
-                                    f"{_col}{net_row}" if net_row else None)
-                else:
-                    f = cell_formula(label, scen, e)   # live 'Summary'! ref or None
-                if is_blank:
+                a = _amounts(scen, e)
+                if label == "Gross Loss":
+                    # the ONLY external link: syndicate = Per Layer SUM, IG = Summary
+                    f = (syn_formula("Gross Loss", scen, e, None, None)
+                         if e in _SYN_PREFIX else cell_formula(label, scen, e))
+                    if f is not None:
+                        c = _cell(ws, r, 4 + j, f, alt=alt, bold=bold)
+                        c.number_format = MONEY
+                        c.alignment = Alignment(horizontal="right")
+                    else:
+                        _cell(ws, r, 4 + j, v, alt=alt, money=True, bold=bold)
+                elif label in _CALC and not is_blank and a is not None:
+                    # in-tab cascade derived from this column's Gross cell
+                    c = _cell(ws, r, 4 + j, _derived(label, e, col, LR, a),
+                              alt=alt, bold=bold)
+                    c.number_format = MONEY
+                    c.alignment = Alignment(horizontal="right")
+                elif is_blank:
                     c = _cell(ws, r, 4 + j, None, alt=alt)
                     c.fill = PatternFill("solid", start_color="E8E8E8")
                 elif is_pct:
-                    c = _cell(ws, r, 4 + j, f if f is not None else v, alt=alt)
+                    c = _cell(ws, r, 4 + j, v, alt=alt)   # inline % literal
                     c.number_format = '0.00000000'
-                    c.alignment = Alignment(horizontal="right")
-                elif f is not None:
-                    # live formula: set money format explicitly (a formula string
-                    # isn't numeric, so _cell won't apply it automatically)
-                    c = _cell(ws, r, 4 + j, f, alt=alt, bold=bold)
-                    c.number_format = MONEY
                     c.alignment = Alignment(horizontal="right")
                 else:
                     _cell(ws, r, 4 + j, v, alt=alt, money=True, bold=bold)
-            if label == "Gross Loss":
-                gross_row = r
-            elif label == "Net Loss":
-                net_row = r
             r += 1
         r += 2
     ws.cell(row=r, column=2,
-            value="Every value is LIVE: IG columns link to the Summary tab; S3123 "
-                  "/ S2126 columns =SUM the Per Layer scenario contributions (QS to "
-                  "IG = gross − net). Grey cells are not entered for the Space book "
-                  "(IGR rows apply to FUL/FIID only; IG Equity % to FIHL/FIBL only; "
-                  "S3123/S2126 Max Risk is an engine value — no Lloyd's per-layer "
-                  "column). On a frozen-extract run they tie to the filed template "
-                  "to the dollar.").font = F_SUB
+            value="Self-contained: only Gross Loss links out (IG → Summary, "
+                  "S3123/S2126 → =SUM of the Per Layer scenario contributions). "
+                  "Every row below Gross is an in-tab formula that nets Gross down "
+                  "with this entity's cession parameters — Outwards QS %, IGR QS %, "
+                  "and the IGR XoL deductible/limit cap (FUL 50m/245m, FIID "
+                  "7.5m/72.5m) — so Net = Gross − recoveries and ties to the engine "
+                  "net to the dollar. Change a Gross cell and the whole block "
+                  "recomputes. Grey cells are not entered (IGR rows FUL/FIID only; "
+                  "IG Equity % FIHL/FIBL only).").font = F_SUB
     ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=9)
     ws.row_dimensions[r].height = 28
     return ws
