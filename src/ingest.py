@@ -110,6 +110,8 @@ _SQL_TARGETS = {
     "isconsortium": "is_consortium",
     "action": "override_action",   # 'Add Layer' / 'Remove Layer' from manual table
     "placingbasis": "placing_basis",
+    "controllingbody": "controlling_body",   # Consortium / IG / MGU — how the layer is written
+
     # Renewal pointers from the PBI layer snapshot (J.Pbi.Layers_t) — feed the
     # renewal-policy check. Absent in workbook/CSV runs; optional everywhere.
     "renewedtoprogramid": "renewed_to_program_id",

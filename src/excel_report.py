@@ -319,6 +319,7 @@ _PL_SHEET = "Per Layer"
 _PL_KEEP = ["program_id", "layer_id", "entity", "mv_class", "mapping_code",
             "spacecraft_id", "spacecraft_name", "orbit", "bus_manufacturer",
             "inception", "expiry", "on_risk_date", "off_risk_date",
+            "controlling_body", "placing_basis",
             "rpf", "per_sc", "ext_qs", "s3123_qs",
             "equity_usd",
             # engine's own per-layer S3123 basis — so linkify can compute s3123_qs
@@ -374,6 +375,7 @@ _PL_PRIMARY = {
     "program_id", "layer_id", "entity", "mv_class", "mapping_code",
     "spacecraft_id", "spacecraft_name", "orbit", "bus_manufacturer", "inception",
     "expiry", "on_risk_date", "off_risk_date",
+    "controlling_body", "placing_basis",
     "rpf", "per_sc", "ext_qs", "s3123_qs", "equity_usd",
     "igr_qs_rate", "igr_qs_ceded", "net_of_qs", "xol_ceded", "net_of_xol",
     "total_fibl_ceded",
