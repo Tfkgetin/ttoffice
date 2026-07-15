@@ -207,6 +207,21 @@ data_corrections:
     date_logged: "2026-04-01"
     established: "2026Q1"
     reason: "ASBM 1 (Norway) Elliptical orbit reclassified to GEO-GSO per methodology agreement; was filtered out of GEO scenarios"
+
+  # ===== Q1 auto-vs-manual consistency (added 2026-07-15) =====
+  # EUTELSAT 36D layer 373475/518720: in the auto extract but excluded from the
+  # manually-filed Q1 (data-entry lag). Force off-risk before the as-at date so
+  # the engine's post-correction on-risk re-filter (engine.py) drops it, aligning
+  # the auto Q1 book with the filed Q1. Q2 is unaffected — the exposure flows in
+  # there via the renewal to programme 385575. EUTELSAT 36D stays on-risk in Q1
+  # via its other layer (344558), so it remains classified 'Renewed'.
+  - program_id: 373475
+    layer_id: 518720
+    field: off_risk_date
+    value: "2026-03-31"
+    date_logged: "2026-07-15"
+    established: "2026Q2"
+    reason: "EUTELSAT 36D — excluded from manual Q1 (data-entry lag); forced off-risk pre-as-at for auto/manual consistency. Q2 unaffected (renews to programme 385575)."
  
 # reconciliation_notes for 2026Q1 (as-at 2026-04-01)
 # Documentary only — these explain intentional auto-vs-manual differences.
@@ -218,7 +233,7 @@ reconciliation_notes:
     category: "Timing / data lag"
     date_logged: "2026-04-01"
     established: "2026Q1"
-    note: "EUTELSAT 36D — in auto, not in manual. Inception 2026-03-31 (one day before as-at) was a data-entry lag: the layer was not yet in the system when the manual book was built. Auto correctly includes it as on-risk; decision is to keep. No correction needed."
+    note: "EUTELSAT 36D — in auto, not in manual. Inception 2026-03-31 (one day before as-at) was a data-entry lag: the layer was not yet in the system when the manual book was built. REVISED 2026-07-15: excluded from auto Q1 for consistency with the filed (manual) Q1 — see the matching data_correction forcing off_risk_date to 2026-03-31 (dropped by the engine's on-risk re-filter). Q2 unaffected: the exposure renews onto programme 385575."
   # ===== D5 fix documentation (2026Q2 recon) — pipeline was wrong, manual right =====
   # SXM-10 (scid 17163) & NUSANTARA LIMA (scid 17950): 2022 inceptions,
   # pre-consortium; live view restated is_consortium = TRUE and the old code
