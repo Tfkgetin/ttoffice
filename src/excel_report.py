@@ -318,7 +318,8 @@ def _breakdown(ws, r, label_field, group, total, label_w=30,
 _PL_SHEET = "Per Layer"
 _PL_KEEP = ["program_id", "layer_id", "entity", "mv_class", "mapping_code",
             "spacecraft_id", "spacecraft_name", "orbit", "bus_manufacturer",
-            "inception", "off_risk_date", "rpf", "per_sc", "ext_qs", "s3123_qs",
+            "inception", "expiry", "on_risk_date", "off_risk_date",
+            "rpf", "per_sc", "ext_qs", "s3123_qs",
             "equity_usd",
             # engine's own per-layer S3123 basis — so linkify can compute s3123_qs
             # / equity EXACTLY (3-tier factor + full eligibility) instead of a
@@ -372,7 +373,8 @@ _FIHL_CONTRIB = {"Proton Flare": "pf_fihl", "Generic Defect": "gd_fihl",
 _PL_PRIMARY = {
     "program_id", "layer_id", "entity", "mv_class", "mapping_code",
     "spacecraft_id", "spacecraft_name", "orbit", "bus_manufacturer", "inception",
-    "off_risk_date", "rpf", "per_sc", "ext_qs", "s3123_qs", "equity_usd",
+    "expiry", "on_risk_date", "off_risk_date",
+    "rpf", "per_sc", "ext_qs", "s3123_qs", "equity_usd",
     "igr_qs_rate", "igr_qs_ceded", "net_of_qs", "xol_ceded", "net_of_xol",
     "total_fibl_ceded",
 }
