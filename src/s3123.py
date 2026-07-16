@@ -83,6 +83,11 @@ def _cfg(p, key: str = "s3123_rds") -> dict:
         "agg_xol": xol,
         "consortium_start": _as_date(c.get("consortium_start")) or CONSORTIUM_START,
         "share_source": c.get("share", "consortium_factor"),
+        # Lloyd's population is the operating entities only (FUL + FIID). FIBL is
+        # the internal RI receiver, not a primary writer, so consortium layers
+        # booked to it carry NO S3123 syndicate share — JJ's filed book excludes
+        # them (this is the ALSAT 3A/3B reconciliation). Overridable via config.
+        "exclude_entities": set(c.get("lloyds_exclude_entities", ["FIBL"]) or []),
         "pf":  sc.get("proton_flare",  {"orbits": ["GEO-GSO"], "loss": 0.05}),
         "sw":  sc.get("space_weather", {"top_n": 4, "loss": 1.00}),
         "gd":  sc.get("generic_defect", {"top_n": 10,
@@ -125,6 +130,10 @@ def s3123_share(df: pd.DataFrame, cfg: dict | None = None,
         eligible = pd.Series(True, index=df.index)
     incep = df["inception"].map(_as_date)
     eligible = eligible & (incep >= cons_start)
+    # Operating-entity gate: FIBL (internal RI receiver) carries no Lloyd's share.
+    excl = (cfg or {}).get("exclude_entities", {"FIBL"})
+    if excl and "entity" in df.columns:
+        eligible = eligible & ~df["entity"].isin(excl)
     return share.where(eligible, 0.0)
 
 
@@ -316,6 +325,9 @@ def s3123_layer_contribs(df: pd.DataFrame, p, cfg_key: str = "s3123_rds",
     else:
         elig = pd.Series(True, index=df.index)
     elig = elig & (df["inception"].map(_as_date) >= cons_start)
+    _excl_ent = cfg.get("exclude_entities", {"FIBL"})
+    if _excl_ent and "entity" in df.columns:
+        elig = elig & ~df["entity"].isin(_excl_ent)
     out[f"{prefix}_rds_elig"] = elig.astype(float)
     for scen, slug in SCEN_SLUG.items():
         _, _, _, line = _CALC[scen](df, share, cfg)  # per-line gross Series
