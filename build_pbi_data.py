@@ -1,91 +1,98 @@
 #!/usr/bin/env python3
 """
-Self-refreshing Power BI data prep for the Space RDS.
+Self-refreshing Power BI STAR SCHEMA for the Space RDS.
 
-Run from the repo root AFTER the pipeline has produced one or more quarterly
-runs:
+Run from the repo root after the pipeline has produced one or more quarters:
 
-    python build_pbi_data.py            # discovers every output/<as_at>/ run
-    python build_pbi_data.py --out pbi_data
+    python run_space_rds.py          # -> output/<as_at>/
+    python build_pbi_data.py         # -> pbi_data/
 
-For each quarter it reads output/<as_at>/per_layer.csv (+ manifest.json for the
-quarter label), recomputes the Lloyd's syndicate shares on the FILED basis
-(FUL+FIID, FIBL excluded — via src.s3123, so it ties JJ to the dollar), adds
-clash / net-cascade / time dimensions, stacks all quarters, and writes a small
-star schema under ./pbi_data:
+Discovers every output/<as_at>/ run and emits a tidy star schema. The key design
+choice is LONG fact tables (one row per quarter x entity x scenario, and per
+layer x scenario) rather than wide columns — that is what lets a single visual
+serve every scenario/entity/perspective via field parameters, instead of one
+visual per combination.
 
-    fact_per_layer.csv          layer x quarter   (the fact table)
-    dim_spacecraft.csv          one row per spacecraft (latest attributes)
-    dim_quarter.csv             quarter x as-at + sort order (time axis)
-    fact_spacecraft_quarter.csv spacecraft x quarter + movement vs prior Q
-    dim_scenario_params.csv     scenario reference card
-    dim_risk_appetite.csv       appetite thresholds for RAG flags
+    FACTS
+      fact_layer.csv            layer x quarter               detail, exposure, net cascade
+      fact_layer_scenario.csv   layer x qtr x scen x entity   contribution ($)
+      fact_scenario.csv         qtr x entity x scenario       gross / net / ceded
+      fact_movement.csv         spacecraft x quarter          movement buckets
+    DIMENSIONS
+      dim_quarter.csv  dim_spacecraft.csv  dim_entity.csv
+      dim_scenario.csv  dim_risk_appetite.csv
 
-Nothing is hard-coded to a quarter: drop a new output/<as_at>/ run in and re-run.
+Nothing is hard-coded to a quarter: drop in a new output/<as_at>/ and re-run.
 """
 from __future__ import annotations
-import argparse, json, sys
+import argparse, json, re, sys
 from pathlib import Path
 import pandas as pd
 
-# --- optional import of the pipeline's own share logic (best: ties filed basis)
-try:
+try:                                    # pipeline's own logic (preferred)
     from src import s3123 as _s3123
     from src.parameters import Params
     _HAVE_SRC = True
-except Exception:                                   # run outside the repo
+except Exception:
     _HAVE_SRC = False
 
+SCEN = {"pf": "Proton Flare", "gd": "Generic Defect", "sd": "Space Debris",
+        "sw": "Space Weather", "mr": "Max Risk"}
+ENT = {"fihl": "FIHL", "ful": "FUL", "fiid": "FIID", "fibl": "FIBL"}
+ENT_TYPE = {"FIHL": "Group", "FUL": "Operating", "FIID": "Operating",
+            "FIBL": "Internal RI receiver", "S3123": "Syndicate", "S2126": "Syndicate"}
+ENT_SORT = {"FIHL": 1, "FUL": 2, "FIID": 3, "FIBL": 4, "S3123": 5, "S2126": 6}
+SCEN_SORT = {"Proton Flare": 1, "Generic Defect": 2, "Space Debris": 3,
+             "Space Weather": 4, "Max Risk": 5}
 
-# ---------------------------------------------------------------- discovery ---
-def discover_runs(root: Path):
-    """Every output/<as_at>/per_layer.csv, oldest first."""
+
+# --------------------------------------------------------------- discovery ---
+def discover(root: Path):
     runs = []
-    for d in sorted(root.glob("*/")):
-        pl = d / "per_layer.csv"
-        if not pl.exists():
+    for d in sorted(p for p in root.iterdir() if p.is_dir()):
+        if not (d / "per_layer.csv").exists():
             continue
-        as_at = d.name
-        quarter = as_at
+        q = d.name
         mf = d / "manifest.json"
         if mf.exists():
             try:
-                quarter = json.loads(mf.read_text()).get("quarter", as_at)
+                q = json.loads(mf.read_text()).get("quarter", d.name)
             except Exception:
                 pass
-        runs.append({"as_at": as_at, "quarter": quarter, "path": pl})
+        runs.append({"as_at": d.name, "quarter": q, "dir": d})
     return runs
 
 
 def load_params(quarter: str):
-    """config/<quarter>.yaml -> Params, or None (share recompute then falls back)."""
     if not _HAVE_SRC:
         return None
-    for cand in (f"config/{quarter}.yaml", f"config/{quarter.replace(' ', '')}.yaml"):
-        if Path(cand).exists():
+    for c in (f"config/{quarter}.yaml", f"config/{quarter.replace(' ', '')}.yaml"):
+        if Path(c).exists():
             try:
-                return Params.load(cand)
+                return Params.load(c)
             except Exception as e:
-                print(f"    ! could not load {cand}: {e}")
+                print(f"    ! {c}: {e}")
     return None
 
 
-# ---------------------------------------------------------------- enrichment --
-NUM = ["per_sc", "rpf", "altitude_km", "s3123_factor", "s2126_factor",
-       "ext_qs", "igr_qs_ceded", "net_of_qs", "xol_ceded", "net_of_xol",
-       "s3123_qs", "equity_usd", "total_fibl_ceded",
-       "pf_fihl", "gd_fihl", "sd_fihl", "sw_fihl", "mr_fihl",
-       "pf_ful", "gd_ful", "sd_ful", "pf_fiid", "gd_fiid", "sd_fiid"]
-
-KEEP = ["program_id", "layer_id", "layer_key", "entity", "mapping_code",
-        "spacecraft_id", "spacecraft_name", "orbit", "bus_manufacturer",
-        "bus_family", "coverage", "placing_basis", "controlling_body",
-        "is_consortium", "inception", "expiry", "on_risk_date", "off_risk_date"]
+# -------------------------------------------------------------- fact_layer ---
+NUMC = ["per_sc", "rpf", "altitude_km", "s3123_factor", "s2126_factor",
+        "ext_qs", "igr_qs_ceded", "net_of_qs", "xol_ceded", "net_of_xol",
+        "s3123_qs", "equity_usd", "total_fibl_ceded"]
+DIMC = ["program_id", "layer_id", "entity", "mapping_code", "spacecraft_id",
+        "spacecraft_name", "orbit", "bus_manufacturer", "bus_family", "coverage",
+        "placing_basis", "controlling_body", "is_consortium",
+        "inception", "expiry", "on_risk_date", "off_risk_date"]
 
 
-def altitude_band(orbit, km):
-    if pd.isna(km) or km == 0:
-        return {"LEO": "LEO (unbanded)", "MEO": "MEO", "GEO-GSO": "GEO"}.get(str(orbit), str(orbit))
+def band(orbit, km):
+    try:
+        km = float(km)
+    except Exception:
+        km = 0
+    if not km:
+        return {"LEO": "LEO (no altitude)", "MEO": "MEO",
+                "GEO-GSO": "GEO"}.get(str(orbit), str(orbit) or "Unknown")
     if km < 600:   return "LEO 400-600"
     if km < 800:   return "LEO 600-800"
     if km < 1200:  return "LEO 800-1200"
@@ -94,146 +101,242 @@ def altitude_band(orbit, km):
     return "GEO"
 
 
-def syndicate_share(df, params, factor_col):
-    """FILED basis share (FUL+FIID, FIBL excluded). Uses src.s3123 when available."""
-    if _HAVE_SRC and params is not None and factor_col in df.columns:
-        try:
-            return _s3123.s3123_share(df.copy(), _s3123._cfg(params), factor_col=factor_col)
-        except Exception as e:
-            print(f"    ! s3123_share fallback ({factor_col}): {e}")
-    # fallback: per_sc x factor, consortium & non-FIBL only
-    if factor_col not in df.columns:
+def share(df, params, col):
+    """Lloyd's share on the FILED basis (FUL+FIID, FIBL excluded)."""
+    if col not in df.columns:
         return pd.Series(0.0, index=df.index)
+    if _HAVE_SRC and params is not None:
+        try:
+            return _s3123.s3123_share(df.copy(), _s3123._cfg(params), factor_col=col)
+        except Exception as e:
+            print(f"    ! s3123_share fallback ({col}): {e}")
     isc = (df["is_consortium"].astype(str).str.lower().isin(["true", "1", "1.0"])
-           if "is_consortium" in df.columns else df[factor_col] > 0)
-    return (df["per_sc"] * df[factor_col]).where(isc & ~df["entity"].eq("FIBL"), 0.0)
+           if "is_consortium" in df.columns else df[col] > 0)
+    return (df["per_sc"] * df[col]).where(isc & ~df["entity"].eq("FIBL"), 0.0)
 
 
-def enrich(path, quarter, as_at, params):
-    d = pd.read_csv(path, low_memory=False)
-    for c in KEEP:
+def build_layer(run, params):
+    d = pd.read_csv(run["dir"] / "per_layer.csv", low_memory=False)
+    for c in DIMC:
         if c not in d.columns:
             d[c] = pd.NA
-    for c in NUM:
+    for c in NUMC:
         d[c] = pd.to_numeric(d[c], errors="coerce").fillna(0) if c in d.columns else 0.0
     d["entity"] = d["entity"].astype(str)
     d["orbit"] = d["orbit"].astype(str).replace("nan", "")
-    d["quarter"] = quarter
-    d["as_at"] = as_at
-    d["is_leo"] = (d["orbit"] == "LEO").astype(int)
-    d["altitude_band"] = [altitude_band(o, k) for o, k in zip(d["orbit"], d["altitude_km"])]
-    d["s3123_share"] = syndicate_share(d, params, "s3123_factor").values
-    d["s2126_share"] = syndicate_share(d, params, "s2126_factor").values
-    keep = KEEP + NUM + ["quarter", "as_at", "is_leo", "altitude_band",
-                         "s3123_share", "s2126_share"]
-    return d[[c for c in keep if c in d.columns]].copy()
+    d["quarter"] = run["quarter"]
+    d["altitude_band"] = [band(o, k) for o, k in zip(d["orbit"], d["altitude_km"])]
+    d["s3123_share"] = share(d, params, "s3123_factor").values
+    d["s2126_share"] = share(d, params, "s2126_factor").values
+    d["ceded_total"] = d["per_sc"] - d["net_of_xol"]
+    d["layer_uid"] = (d["quarter"].astype(str) + "|" + d["program_id"].astype(str)
+                      + "|" + d["layer_id"].astype(str))
+    cols = (["layer_uid", "quarter"] + DIMC + NUMC
+            + ["altitude_band", "s3123_share", "s2126_share", "ceded_total"])
+    return d[[c for c in cols if c in d.columns]].copy(), d
 
 
-# ------------------------------------------------------------------- movement -
-def movement(fact, quarters):
-    """spacecraft x quarter with status vs the immediately-prior quarter."""
-    def prog(df):
-        return (df.groupby("spacecraft_id")["program_id"]
-                  .apply(lambda s: "|".join(sorted(map(str, set(s))))))
+# ----------------------------------------------- fact_layer_scenario (LONG) ---
+def build_layer_scenario(raw, quarter):
+    """Unpivot the engine's per-layer scenario contributions into long form."""
+    rows = []
+    id_cols = [c for c in ["layer_uid", "spacecraft_id", "spacecraft_name", "orbit",
+                           "bus_manufacturer", "altitude_band"] if c in raw.columns]
+    for col in raw.columns:
+        m = re.fullmatch(r"(pf|gd|sd|sw|mr)_(fihl|ful|fiid|fibl)(?:_(direct|ceded))?", col)
+        if m:
+            slug, e, sub = m.groups()
+            ent, scen = ENT[e], SCEN[slug]
+            persp = "Gross" if sub in (None, "direct") else "Ceded in"
+        else:
+            m2 = re.fullmatch(r"(s3123|s2126)_(pf|gd|sd|sw|mr)_(g|n)", col)
+            if not m2:
+                continue
+            syn, slug, gn = m2.groups()
+            ent, scen = syn.upper(), SCEN[slug]
+            persp = "Gross" if gn == "g" else "Net"
+        v = pd.to_numeric(raw[col], errors="coerce").fillna(0)
+        if v.abs().sum() == 0:
+            continue
+        blk = raw.loc[v != 0, id_cols].copy()
+        blk["quarter"] = quarter
+        blk["entity"] = ent
+        blk["scenario"] = scen
+        blk["perspective"] = persp
+        blk["contribution"] = v[v != 0].values
+        rows.append(blk)
+    return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
+
+
+# ---------------------------------------------------- fact_scenario (LONG) ----
+def build_scenario(run, params, per_layer_raw):
+    """quarter x entity x scenario -> gross / net, from the pipeline's own grids."""
+    out = []
+    sg = run["dir"] / "summary_grid.csv"
+    if sg.exists():
+        g = pd.read_csv(sg)
+
+        def pick(r, base):
+            if r.get("entity") in ("FIHL", "FIBL"):
+                for alt in (f"{base}_incl_addons", f"{base}_receiver"):
+                    if alt in g.columns and pd.notna(r.get(alt)):
+                        return float(r[alt])
+            return float(r.get(base, 0) or 0)
+
+        for _, r in g.iterrows():
+            out.append(dict(quarter=run["quarter"], entity=r.get("entity"),
+                            scenario=r.get("scenario"), detail=r.get("detail"),
+                            gross=pick(r, "gross"), net=pick(r, "net"),
+                            gross_ex_addons=float(r.get("gross", 0) or 0),
+                            net_ex_addons=float(r.get("net", 0) or 0)))
+    s3 = run["dir"] / "s3123_grid.csv"
+    if s3.exists():
+        for _, r in pd.read_csv(s3).iterrows():
+            out.append(dict(quarter=run["quarter"], entity=r.get("entity", "S3123"),
+                            scenario=r.get("scenario"), detail=r.get("detail"),
+                            gross=float(r.get("gross", 0) or 0),
+                            net=float(r.get("net", 0) or 0),
+                            gross_ex_addons=float(r.get("gross", 0) or 0),
+                            net_ex_addons=float(r.get("net", 0) or 0)))
+    # S2126 grid isn't exported as CSV — compute it when src is importable
+    if _HAVE_SRC and params is not None and per_layer_raw is not None:
+        try:
+            s2 = _s3123.s3123_grid(per_layer_raw, params, cfg_key="s2126_rds",
+                                   factor_col="s2126_factor", label="S2126")
+            for _, r in s2.iterrows():
+                out.append(dict(quarter=run["quarter"], entity="S2126",
+                                scenario=r.get("scenario"), detail=r.get("detail"),
+                                gross=float(r.get("gross", 0) or 0),
+                                net=float(r.get("net", 0) or 0),
+                                gross_ex_addons=float(r.get("gross", 0) or 0),
+                                net_ex_addons=float(r.get("net", 0) or 0)))
+        except Exception as e:
+            print(f"    ! S2126 grid skipped: {e}")
+    df = pd.DataFrame(out)
+    if len(df):
+        df["ceded"] = df["gross"] - df["net"]
+    return df
+
+
+# ------------------------------------------------------------ fact_movement ---
+def build_movement(fact_layer, quarters):
+    def progs(d):
+        return (d.groupby("spacecraft_id")["program_id"]
+                 .apply(lambda s: "|".join(sorted(map(str, set(s))))).to_dict())
     rows = []
     for i, q in enumerate(quarters):
-        cur = fact[fact["quarter"] == q]
-        cur_e = cur.groupby(["spacecraft_id", "spacecraft_name", "orbit"])["per_sc"].sum().reset_index()
-        cur_p = prog(cur)
+        cur = fact_layer[fact_layer["quarter"] == q]
+        ce = cur.groupby(["spacecraft_id", "spacecraft_name"])["per_sc"].sum().reset_index()
+        cp = progs(cur)
         if i == 0:
-            prev_e, prev_p = {}, {}
+            pe, pp = {}, {}
         else:
-            pv = fact[fact["quarter"] == quarters[i - 1]]
-            prev_e = pv.groupby("spacecraft_id")["per_sc"].sum().to_dict()
-            prev_p = prog(pv).to_dict()
-        for _, r in cur_e.iterrows():
-            sid = r["spacecraft_id"]
-            a = float(prev_e.get(sid, 0)); b = float(r["per_sc"])
-            if i == 0:                     st = "Baseline"
-            elif a == 0:                   st = "New"
-            elif prev_p.get(sid) != cur_p.get(sid): st = "Renewed"
-            else:                          st = "Continued"
-            rows.append(dict(quarter=q, spacecraft_id=sid, spacecraft_name=r["spacecraft_name"],
-                             orbit=r["orbit"], exposure=b, exposure_prev=a, delta=b - a,
-                             movement_status=st))
-        # non-renewals: in prior, absent now
-        gone = set(prev_e) - set(cur_e["spacecraft_id"])
-        for sid in gone:
-            nm = fact.loc[fact["spacecraft_id"] == sid, "spacecraft_name"]
+            pv = fact_layer[fact_layer["quarter"] == quarters[i - 1]]
+            pe = pv.groupby("spacecraft_id")["per_sc"].sum().to_dict()
+            pp = progs(pv)
+        for _, r in ce.iterrows():
+            sid, b = r["spacecraft_id"], float(r["per_sc"])
+            a = float(pe.get(sid, 0))
+            st = ("Baseline" if i == 0 else "New" if a == 0
+                  else "Renewed" if pp.get(sid) != cp.get(sid) else "Continued")
+            rows.append(dict(quarter=q, spacecraft_id=sid,
+                             spacecraft_name=r["spacecraft_name"], exposure=b,
+                             exposure_prior=a, delta=b - a, movement_status=st))
+        for sid in set(pe) - set(ce["spacecraft_id"]):
+            nm = fact_layer.loc[fact_layer["spacecraft_id"] == sid, "spacecraft_name"]
             rows.append(dict(quarter=q, spacecraft_id=sid,
                              spacecraft_name=(nm.iloc[0] if len(nm) else str(sid)),
-                             orbit="", exposure=0.0, exposure_prev=float(prev_e[sid]),
-                             delta=-float(prev_e[sid]), movement_status="Non-renewed"))
+                             exposure=0.0, exposure_prior=float(pe[sid]),
+                             delta=-float(pe[sid]), movement_status="Non-renewed"))
     return pd.DataFrame(rows)
 
 
-# ----------------------------------------------------------------------- main -
+# ---------------------------------------------------------------------- main --
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--output-root", default="output", help="dir holding <as_at>/ runs")
-    ap.add_argument("--out", default="pbi_data", help="where to write the model")
-    args = ap.parse_args()
+    ap.add_argument("--output-root", default="output")
+    ap.add_argument("--out", default="pbi_data")
+    a = ap.parse_args()
 
-    root = Path(args.output_root)
-    runs = discover_runs(root)
+    root = Path(a.output_root)
+    if not root.exists():
+        sys.exit(f"{root}/ not found — run the pipeline first.")
+    runs = discover(root)
     if not runs:
-        sys.exit(f"No runs found under {root}/<as_at>/per_layer.csv — run the pipeline first.")
+        sys.exit(f"No <as_at>/per_layer.csv under {root}/ — run the pipeline first.")
+    print(f"Quarters found: {', '.join(r['quarter'] for r in runs)}")
 
-    print(f"Discovered {len(runs)} quarter(s): " + ", ".join(r['quarter'] for r in runs))
-    frames = []
+    L, LS, S = [], [], []
     for r in runs:
-        params = load_params(r["quarter"])
-        f = enrich(r["path"], r["quarter"], r["as_at"], params)
-        frames.append(f)
-        print(f"  {r['quarter']:10} rows={len(f):4}  gross={f['per_sc'].sum():,.0f}"
-              f"  S3123={f['s3123_share'].sum():,.0f}  S2126={f['s2126_share'].sum():,.0f}")
-    fact = pd.concat(frames, ignore_index=True)
+        p = load_params(r["quarter"])
+        lay, raw = build_layer(r, p)
+        L.append(lay)
+        ls = build_layer_scenario(raw, r["quarter"])
+        if len(ls):
+            LS.append(ls)
+        sc = build_scenario(r, p, raw)
+        if len(sc):
+            S.append(sc)
+        print(f"  {r['quarter']:>9}  layers={len(lay):4}  gross={lay['per_sc'].sum():>15,.0f}"
+              f"  S3123={lay['s3123_share'].sum():>13,.0f}"
+              f"  S2126={lay['s2126_share'].sum():>12,.0f}")
 
+    fact_layer = pd.concat(L, ignore_index=True)
     quarters = [r["quarter"] for r in runs]
-    out = Path(args.out); out.mkdir(parents=True, exist_ok=True)
-    fact.to_csv(out / "fact_per_layer.csv", index=False)
+    out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
 
-    # dim_quarter (time axis)
-    pd.DataFrame({"quarter": quarters,
-                  "as_at": [r["as_at"] for r in runs],
-                  "sort_order": range(len(quarters))}).to_csv(out / "dim_quarter.csv", index=False)
+    fact_layer.to_csv(out / "fact_layer.csv", index=False)
+    (pd.concat(LS, ignore_index=True) if LS else pd.DataFrame()).to_csv(
+        out / "fact_layer_scenario.csv", index=False)
+    (pd.concat(S, ignore_index=True) if S else pd.DataFrame()).to_csv(
+        out / "fact_scenario.csv", index=False)
+    build_movement(fact_layer, quarters).to_csv(out / "fact_movement.csv", index=False)
 
-    # dim_spacecraft (latest attributes)
-    last = fact[fact["quarter"] == quarters[-1]]
-    dim = (fact.sort_values("as_at").groupby("spacecraft_id")
-             .agg(spacecraft_name=("spacecraft_name", "last"),
-                  orbit=("orbit", "last"),
-                  bus_manufacturer=("bus_manufacturer", "last"),
-                  altitude_band=("altitude_band", "last")).reset_index())
-    dim.to_csv(out / "dim_spacecraft.csv", index=False)
+    # ---- dimensions ----
+    pd.DataFrame([dict(quarter=r["quarter"], as_at=r["as_at"], sort_order=i,
+                       year=str(r["as_at"])[:4])
+                  for i, r in enumerate(runs)]).to_csv(out / "dim_quarter.csv", index=False)
 
-    # fact_spacecraft_quarter (movement)
-    movement(fact, quarters).to_csv(out / "fact_spacecraft_quarter.csv", index=False)
+    (fact_layer.sort_values("quarter")
+        .groupby("spacecraft_id")
+        .agg(spacecraft_name=("spacecraft_name", "last"), orbit=("orbit", "last"),
+             bus_manufacturer=("bus_manufacturer", "last"),
+             altitude_band=("altitude_band", "last"))
+        .reset_index()).to_csv(out / "dim_spacecraft.csv", index=False)
 
-    # dim_scenario_params
+    ents = sorted(set(fact_layer["entity"].dropna()) | set(ENT_SORT))
+    pd.DataFrame([dict(entity=e, entity_type=ENT_TYPE.get(e, "Other"),
+                       sort_order=ENT_SORT.get(e, 99)) for e in ents]
+                 ).to_csv(out / "dim_entity.csv", index=False)
+
     pd.DataFrame([
-        dict(scenario="Proton Flare",  loss_factor="0.05", orbit_scope="GEO-GSO", uses_rpf=False),
-        dict(scenario="Generic Defect", loss_factor="0.50", orbit_scope="GEO-GSO, MEO", uses_rpf=True),
-        dict(scenario="Space Debris",  loss_factor="LEO 0.40 / MEO 0.10 / GEO 0.05", orbit_scope="All", uses_rpf=False),
-        dict(scenario="Space Weather", loss_factor="1.00", orbit_scope="Worst bus manufacturer", uses_rpf=False),
-        dict(scenario="Max Risk",      loss_factor="1.00", orbit_scope="Largest spacecraft", uses_rpf=False),
-    ]).to_csv(out / "dim_scenario_params.csv", index=False)
+        dict(scenario="Proton Flare",   loss_factor="0.05", orbit_scope="GEO-GSO",
+             uses_rpf=False, selection="Additive"),
+        dict(scenario="Generic Defect", loss_factor="0.50", orbit_scope="GEO-GSO, MEO",
+             uses_rpf=True,  selection="Additive"),
+        dict(scenario="Space Debris",   loss_factor="LEO .40 / MEO .10 / GEO .05",
+             orbit_scope="All", uses_rpf=False, selection="Additive by orbit"),
+        dict(scenario="Space Weather",  loss_factor="1.00", orbit_scope="All",
+             uses_rpf=False, selection="Worst bus manufacturer"),
+        dict(scenario="Max Risk",       loss_factor="1.00", orbit_scope="All",
+             uses_rpf=False, selection="Largest single spacecraft"),
+    ]).assign(sort_order=lambda d: d["scenario"].map(SCEN_SORT)
+              ).to_csv(out / "dim_scenario.csv", index=False)
 
-    # dim_risk_appetite (RAG thresholds) — Lloyd's read from config when available
     appetite = 50_000_000
-    p_last = load_params(quarters[-1])
-    if p_last is not None:
-        appetite = ((p_last.raw.get("s3123_rds") or {}).get("lloyds_summary") or {}).get(
-            "risk_appetite_usd", appetite)
-    pd.DataFrame([
-        dict(book="S3123 (Lloyd's)", appetite_usd=appetite),
-        dict(book="IG",              appetite_usd=pd.NA),      # set your IG appetite here
-    ]).to_csv(out / "dim_risk_appetite.csv", index=False)
+    pl = load_params(quarters[-1])
+    if pl is not None:
+        appetite = (((pl.raw.get("s3123_rds") or {}).get("lloyds_summary") or {})
+                    .get("risk_appetite_usd", appetite))
+    pd.DataFrame([dict(entity="S3123", appetite_usd=appetite),
+                  dict(entity="S2126", appetite_usd=appetite),
+                  dict(entity="FIHL",  appetite_usd=None)]
+                 ).to_csv(out / "dim_risk_appetite.csv", index=False)
 
-    print(f"\nWrote {out}/ : fact_per_layer, dim_spacecraft, dim_quarter, "
-          f"fact_spacecraft_quarter, dim_scenario_params, dim_risk_appetite")
-    print("Power BI: relate fact_per_layer[spacecraft_id]->dim_spacecraft, "
-          "fact_*[quarter]->dim_quarter (both single-direction).")
+    print(f"\n{out}/ written — 4 facts + 5 dimensions.")
+    print("Relationships: fact_*[quarter]->dim_quarter, fact_*[spacecraft_id]->dim_spacecraft,")
+    print("               fact_scenario/fact_layer_scenario[entity]->dim_entity,")
+    print("               fact_scenario/fact_layer_scenario[scenario]->dim_scenario.")
 
 
 if __name__ == "__main__":
