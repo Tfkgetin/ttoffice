@@ -293,7 +293,7 @@ def main():
     build_movement(fact_layer, quarters).to_csv(out / "fact_movement.csv", index=False)
 
     # ---- dimensions ----
-    pd.DataFrame([dict(quarter=r["quarter"], as_at=r["as_at"], sort_order=i,
+    pd.DataFrame([dict(quarter=r["quarter"], as_at=r["as_at"], quarter_sort=i,
                        year=str(r["as_at"])[:4])
                   for i, r in enumerate(runs)]).to_csv(out / "dim_quarter.csv", index=False)
 
@@ -306,7 +306,7 @@ def main():
 
     ents = sorted(set(fact_layer["entity"].dropna()) | set(ENT_SORT))
     pd.DataFrame([dict(entity=e, entity_type=ENT_TYPE.get(e, "Other"),
-                       sort_order=ENT_SORT.get(e, 99)) for e in ents]
+                       entity_sort=ENT_SORT.get(e, 99)) for e in ents]
                  ).to_csv(out / "dim_entity.csv", index=False)
 
     pd.DataFrame([
@@ -320,7 +320,7 @@ def main():
              uses_rpf=False, selection="Worst bus manufacturer"),
         dict(scenario="Max Risk",       loss_factor="1.00", orbit_scope="All",
              uses_rpf=False, selection="Largest single spacecraft"),
-    ]).assign(sort_order=lambda d: d["scenario"].map(SCEN_SORT)
+    ]).assign(scenario_sort=lambda d: d["scenario"].map(SCEN_SORT)
               ).to_csv(out / "dim_scenario.csv", index=False)
 
     appetite = 50_000_000
