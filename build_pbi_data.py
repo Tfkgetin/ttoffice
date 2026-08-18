@@ -129,10 +129,18 @@ def build_layer(run, params):
     d["s3123_share"] = share(d, params, "s3123_factor").values
     d["s2126_share"] = share(d, params, "s2126_factor").values
     d["ceded_total"] = d["per_sc"] - d["net_of_xol"]
+    # Executive-summary axes: inception vintage, RPF band, coarse asset class.
+    inc = pd.to_datetime(d["inception"], errors="coerce")
+    d["inception_month"] = inc.dt.strftime("%Y-%m").fillna("Unknown")
+    d["inception_month_sort"] = (inc.dt.year * 100 + inc.dt.month).fillna(0).astype(int)
+    d["rpf_band"] = d["rpf"].map(lambda v: f"RPF {v:.2f}" if v > 0 else "No RPF")
+    d["orbit_class"] = d["orbit"].map(
+        {"GEO-GSO": "GEO", "GEO": "GEO", "MEO": "MEO", "LEO": "LEO"}).fillna("Other")
     d["layer_uid"] = (d["quarter"].astype(str) + "|" + d["program_id"].astype(str)
                       + "|" + d["layer_id"].astype(str))
     cols = (["layer_uid", "quarter"] + DIMC + NUMC
-            + ["altitude_band", "s3123_share", "s2126_share", "ceded_total"])
+            + ["altitude_band", "s3123_share", "s2126_share", "ceded_total",
+               "inception_month", "inception_month_sort", "rpf_band", "orbit_class"])
     return d[[c for c in cols if c in d.columns]].copy(), d
 
 
@@ -141,7 +149,8 @@ def build_layer_scenario(raw, quarter):
     """Unpivot the engine's per-layer scenario contributions into long form."""
     rows = []
     id_cols = [c for c in ["layer_uid", "spacecraft_id", "spacecraft_name", "orbit",
-                           "bus_manufacturer", "altitude_band"] if c in raw.columns]
+                           "bus_manufacturer", "altitude_band", "orbit_class",
+                           "rpf_band", "inception_month"] if c in raw.columns]
     for col in raw.columns:
         m = re.fullmatch(r"(pf|gd|sd|sw|mr)_(fihl|ful|fiid|fibl)(?:_(direct|ceded))?", col)
         if m:
@@ -311,15 +320,26 @@ def main():
 
     pd.DataFrame([
         dict(scenario="Proton Flare",   loss_factor="0.05", orbit_scope="GEO-GSO",
-             uses_rpf=False, selection="Additive"),
+             uses_rpf=False, selection="Additive",
+             method_desc="5% of sum insured on every GEO-GSO spacecraft. "
+                         "No risk-period factor — driver is pure GEO book size."),
         dict(scenario="Generic Defect", loss_factor="0.50", orbit_scope="GEO-GSO, MEO",
-             uses_rpf=True,  selection="Additive"),
+             uses_rpf=True,  selection="Additive",
+             method_desc="50% of sum insured x risk-period factor on GEO-GSO and MEO. "
+                         "Driver is the RPF profile — how close each risk is to launch."),
         dict(scenario="Space Debris",   loss_factor="LEO .40 / MEO .10 / GEO .05",
-             orbit_scope="All", uses_rpf=False, selection="Additive by orbit"),
+             orbit_scope="All", uses_rpf=False, selection="Additive by orbit",
+             method_desc="Orbit-tiered factors: 40% LEO, 10% MEO, 5% GEO. "
+                         "Driver is the orbit mix, dominated by the LEO book."),
         dict(scenario="Space Weather",  loss_factor="1.00", orbit_scope="All",
-             uses_rpf=False, selection="Worst bus manufacturer"),
+             uses_rpf=False, selection="Worst bus manufacturer",
+             method_desc="Total loss of every spacecraft built by the single worst "
+                         "bus-manufacturer group. Selection, not additive — driver is "
+                         "manufacturer concentration."),
         dict(scenario="Max Risk",       loss_factor="1.00", orbit_scope="All",
-             uses_rpf=False, selection="Largest single spacecraft"),
+             uses_rpf=False, selection="Largest single spacecraft",
+             method_desc="Total loss of the single largest spacecraft exposure. "
+                         "Selection, not additive — driver is the peak single risk."),
     ]).assign(scenario_sort=lambda d: d["scenario"].map(SCEN_SORT)
               ).to_csv(out / "dim_scenario.csv", index=False)
 
