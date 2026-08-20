@@ -312,8 +312,28 @@ def main():
         .groupby("spacecraft_id")
         .agg(spacecraft_name=("spacecraft_name", "last"), orbit=("orbit", "last"),
              bus_manufacturer=("bus_manufacturer", "last"),
-             altitude_band=("altitude_band", "last"))
+             altitude_band=("altitude_band", "last"),
+             orbit_class=("orbit_class", "last"))
         .reset_index()).to_csv(out / "dim_spacecraft.csv", index=False)
+
+    # Layer-grain conformed dimensions. fact_layer and fact_layer_scenario have no
+    # relationship to each other, so a chart mixing a measure from one with an axis
+    # from the other repeats the same total in every cell. These give both facts a
+    # shared axis to hang off.
+    fls = pd.concat(LS, ignore_index=True) if LS else pd.DataFrame(columns=["inception_month"])
+    vint = sorted(set(fact_layer["inception_month"].dropna())
+                  | set(fls.get("inception_month", pd.Series(dtype=str)).dropna()))
+    pd.DataFrame([dict(inception_month=v,
+                       inception_month_sort=(int(v[:4]) * 100 + int(v[5:7]))
+                       if v != "Unknown" else 0,
+                       year=v[:4] if v != "Unknown" else "Unknown")
+                  for v in vint]).to_csv(out / "dim_vintage.csv", index=False)
+
+    bands = sorted(set(fact_layer["rpf_band"].dropna())
+                   | set(fls.get("rpf_band", pd.Series(dtype=str)).dropna()))
+    pd.DataFrame([dict(rpf_band=b,
+                       rpf_band_sort=0 if b == "No RPF" else int(round(float(b[4:]) * 100)))
+                  for b in bands]).to_csv(out / "dim_rpf_band.csv", index=False)
 
     ents = sorted(set(fact_layer["entity"].dropna()) | set(ENT_SORT))
     pd.DataFrame([dict(entity=e, entity_type=ENT_TYPE.get(e, "Other"),
@@ -355,10 +375,12 @@ def main():
                   dict(entity="FIHL",  appetite_usd=None)]
                  ).to_csv(out / "dim_risk_appetite.csv", index=False)
 
-    print(f"\n{out}/ written — 4 facts + 5 dimensions.")
+    print(f"\n{out}/ written — 4 facts + 7 dimensions.")
     print("Relationships: fact_*[quarter]->dim_quarter, fact_*[spacecraft_id]->dim_spacecraft,")
     print("               fact_scenario/fact_layer_scenario[entity]->dim_entity,")
-    print("               fact_scenario/fact_layer_scenario[scenario]->dim_scenario.")
+    print("               fact_scenario/fact_layer_scenario[scenario]->dim_scenario,")
+    print("               fact_layer/fact_layer_scenario[inception_month]->dim_vintage,")
+    print("               fact_layer/fact_layer_scenario[rpf_band]->dim_rpf_band.")
 
 
 if __name__ == "__main__":
