@@ -78,8 +78,10 @@ def load_params(quarter: str):
 # -------------------------------------------------------------- fact_layer ---
 NUMC = ["per_sc", "rpf", "altitude_km", "s3123_factor", "s2126_factor",
         "ext_qs", "igr_qs_ceded", "net_of_qs", "xol_ceded", "net_of_xol",
-        "s3123_qs", "equity_usd", "total_fibl_ceded"]
-DIMC = ["program_id", "layer_id", "entity", "mapping_code", "spacecraft_id",
+        "s3123_qs", "equity_usd", "total_fibl_ceded",
+        # scenario bases: debris_dr drives Space Debris, net_ext is Max Risk's gross
+        "debris_dr", "net_ext"]
+DIMC = ["layer_key", "program_id", "layer_id", "entity", "mapping_code", "spacecraft_id",
         "spacecraft_name", "orbit", "bus_manufacturer", "bus_family", "coverage",
         "placing_basis", "controlling_body", "is_consortium",
         "inception", "expiry", "on_risk_date", "off_risk_date"]
