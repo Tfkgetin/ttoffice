@@ -180,6 +180,16 @@ def build_layer_scenario(raw, quarter):
 
 
 # ---------------------------------------------------- fact_scenario (LONG) ----
+def _num(v):
+    """Always a real float. A NaN written to CSV becomes an empty cell, which makes
+    Power Query type the whole column as Text — and SUM() then fails on it."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return 0.0
+    return 0.0 if f != f else f          # f != f is True only for NaN
+
+
 def build_scenario(run, params, per_layer_raw):
     """quarter x entity x scenario -> gross / net, from the pipeline's own grids."""
     out = []
@@ -191,24 +201,24 @@ def build_scenario(run, params, per_layer_raw):
             if r.get("entity") in ("FIHL", "FIBL"):
                 for alt in (f"{base}_incl_addons", f"{base}_receiver"):
                     if alt in g.columns and pd.notna(r.get(alt)):
-                        return float(r[alt])
-            return float(r.get(base, 0) or 0)
+                        return _num(r[alt])
+            return _num(r.get(base, 0))
 
         for _, r in g.iterrows():
             out.append(dict(quarter=run["quarter"], entity=r.get("entity"),
                             scenario=r.get("scenario"), detail=r.get("detail"),
                             gross=pick(r, "gross"), net=pick(r, "net"),
-                            gross_ex_addons=float(r.get("gross", 0) or 0),
-                            net_ex_addons=float(r.get("net", 0) or 0)))
+                            gross_ex_addons=_num(r.get("gross", 0)),
+                            net_ex_addons=_num(r.get("net", 0))))
     s3 = run["dir"] / "s3123_grid.csv"
     if s3.exists():
         for _, r in pd.read_csv(s3).iterrows():
             out.append(dict(quarter=run["quarter"], entity=r.get("entity", "S3123"),
                             scenario=r.get("scenario"), detail=r.get("detail"),
-                            gross=float(r.get("gross", 0) or 0),
-                            net=float(r.get("net", 0) or 0),
-                            gross_ex_addons=float(r.get("gross", 0) or 0),
-                            net_ex_addons=float(r.get("net", 0) or 0)))
+                            gross=_num(r.get("gross", 0)),
+                            net=_num(r.get("net", 0)),
+                            gross_ex_addons=_num(r.get("gross", 0)),
+                            net_ex_addons=_num(r.get("net", 0))))
     # S2126 grid isn't exported as CSV — compute it when src is importable
     if _HAVE_SRC and params is not None and per_layer_raw is not None:
         try:
@@ -217,10 +227,10 @@ def build_scenario(run, params, per_layer_raw):
             for _, r in s2.iterrows():
                 out.append(dict(quarter=run["quarter"], entity="S2126",
                                 scenario=r.get("scenario"), detail=r.get("detail"),
-                                gross=float(r.get("gross", 0) or 0),
-                                net=float(r.get("net", 0) or 0),
-                                gross_ex_addons=float(r.get("gross", 0) or 0),
-                                net_ex_addons=float(r.get("net", 0) or 0)))
+                                gross=_num(r.get("gross", 0)),
+                                net=_num(r.get("net", 0)),
+                                gross_ex_addons=_num(r.get("gross", 0)),
+                                net_ex_addons=_num(r.get("net", 0))))
         except Exception as e:
             print(f"    ! S2126 grid skipped: {e}")
     df = pd.DataFrame(out)
