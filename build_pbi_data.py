@@ -152,7 +152,8 @@ def build_layer_scenario(raw, quarter):
     rows = []
     id_cols = [c for c in ["layer_uid", "spacecraft_id", "spacecraft_name", "orbit",
                            "bus_manufacturer", "altitude_band", "orbit_class",
-                           "rpf_band", "inception_month"] if c in raw.columns]
+                           "rpf_band", "inception_month", "mapping_code"]
+               if c in raw.columns]
     for col in raw.columns:
         m = re.fullmatch(r"(pf|gd|sd|sw|mr)_(fihl|ful|fiid|fibl)(?:_(direct|ceded))?", col)
         if m:
@@ -345,6 +346,12 @@ def main():
                        rpf_band_sort=0 if b == "No RPF" else int(round(float(b[4:]) * 100)))
                   for b in bands]).to_csv(out / "dim_rpf_band.csv", index=False)
 
+    classes = sorted(set(fact_layer["mapping_code"].dropna().astype(str))
+                     | set(fls.get("mapping_code", pd.Series(dtype=str))
+                           .dropna().astype(str)))
+    pd.DataFrame([dict(mapping_code=c) for c in classes]
+                 ).to_csv(out / "dim_class.csv", index=False)
+
     ents = sorted(set(fact_layer["entity"].dropna()) | set(ENT_SORT))
     pd.DataFrame([dict(entity=e, entity_type=ENT_TYPE.get(e, "Other"),
                        entity_sort=ENT_SORT.get(e, 99)) for e in ents]
@@ -385,12 +392,13 @@ def main():
                   dict(entity="FIHL",  appetite_usd=None)]
                  ).to_csv(out / "dim_risk_appetite.csv", index=False)
 
-    print(f"\n{out}/ written — 4 facts + 7 dimensions.")
+    print(f"\n{out}/ written — 4 facts + 8 dimensions.")
     print("Relationships: fact_*[quarter]->dim_quarter, fact_*[spacecraft_id]->dim_spacecraft,")
     print("               fact_scenario/fact_layer_scenario[entity]->dim_entity,")
     print("               fact_scenario/fact_layer_scenario[scenario]->dim_scenario,")
     print("               fact_layer/fact_layer_scenario[inception_month]->dim_vintage,")
-    print("               fact_layer/fact_layer_scenario[rpf_band]->dim_rpf_band.")
+    print("               fact_layer/fact_layer_scenario[rpf_band]->dim_rpf_band,")
+    print("               fact_layer/fact_layer_scenario[mapping_code]->dim_class.")
 
 
 if __name__ == "__main__":
