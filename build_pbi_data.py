@@ -361,24 +361,29 @@ def main():
         dict(scenario="Proton Flare",   loss_factor="0.05", orbit_scope="GEO-GSO",
              uses_rpf=False, selection="Additive",
              method_desc="5% of sum insured on every GEO-GSO spacecraft. "
-                         "No risk-period factor — driver is pure GEO book size."),
+                         "No risk-period factor — driver is pure GEO book size.",
+             basis_short="5% of sum insured, GEO-GSO", scenario_type="Additive"),
         dict(scenario="Generic Defect", loss_factor="0.50", orbit_scope="GEO-GSO, MEO",
              uses_rpf=True,  selection="Additive",
              method_desc="50% of sum insured x risk-period factor on GEO-GSO and MEO. "
-                         "Driver is the RPF profile — how close each risk is to launch."),
+                         "Driver is the RPF profile — how close each risk is to launch.",
+             basis_short="50% × RPF, GEO-GSO + MEO", scenario_type="Additive"),
         dict(scenario="Space Debris",   loss_factor="LEO .40 / MEO .10 / GEO .05",
              orbit_scope="All", uses_rpf=False, selection="Additive by orbit",
              method_desc="Orbit-tiered factors: 40% LEO, 10% MEO, 5% GEO. "
-                         "Driver is the orbit mix, dominated by the LEO book."),
+                         "Driver is the orbit mix, dominated by the LEO book.",
+             basis_short="40% LEO / 10% MEO / 5% GEO, all orbits", scenario_type="Additive"),
         dict(scenario="Space Weather",  loss_factor="1.00", orbit_scope="All",
              uses_rpf=False, selection="Worst bus manufacturer",
              method_desc="Total loss of every spacecraft built by the single worst "
                          "bus-manufacturer group. Selection, not additive — driver is "
-                         "manufacturer concentration."),
+                         "manufacturer concentration.",
+             basis_short="100% of worst bus-manufacturer group", scenario_type="Selection"),
         dict(scenario="Max Risk",       loss_factor="1.00", orbit_scope="All",
              uses_rpf=False, selection="Largest single spacecraft",
              method_desc="Total loss of the single largest spacecraft exposure. "
-                         "Selection, not additive — driver is the peak single risk."),
+                         "Selection, not additive — driver is the peak single risk.",
+             basis_short="100% of largest single spacecraft", scenario_type="Selection"),
     ]).assign(scenario_sort=lambda d: d["scenario"].map(SCEN_SORT)
               ).to_csv(out / "dim_scenario.csv", index=False)
 
