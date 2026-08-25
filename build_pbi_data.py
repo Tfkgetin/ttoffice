@@ -210,7 +210,9 @@ def build_scenario(run, params, per_layer_raw):
                             scenario=r.get("scenario"), detail=r.get("detail"),
                             gross=pick(r, "gross"), net=pick(r, "net"),
                             gross_ex_addons=_num(r.get("gross", 0)),
-                            net_ex_addons=_num(r.get("net", 0))))
+                            net_ex_addons=_num(r.get("net", 0)),
+                            addon_s3123_qs=_num(r.get("s3123_qs", 0)),
+                            addon_equity_usd=_num(r.get("equity_usd", 0))))
     s3 = run["dir"] / "s3123_grid.csv"
     if s3.exists():
         for _, r in pd.read_csv(s3).iterrows():
@@ -219,7 +221,8 @@ def build_scenario(run, params, per_layer_raw):
                             gross=_num(r.get("gross", 0)),
                             net=_num(r.get("net", 0)),
                             gross_ex_addons=_num(r.get("gross", 0)),
-                            net_ex_addons=_num(r.get("net", 0))))
+                            net_ex_addons=_num(r.get("net", 0)),
+                            addon_s3123_qs=0.0, addon_equity_usd=0.0))
     # S2126 grid isn't exported as CSV — compute it when src is importable
     if _HAVE_SRC and params is not None and per_layer_raw is not None:
         try:
@@ -231,7 +234,8 @@ def build_scenario(run, params, per_layer_raw):
                                 gross=_num(r.get("gross", 0)),
                                 net=_num(r.get("net", 0)),
                                 gross_ex_addons=_num(r.get("gross", 0)),
-                                net_ex_addons=_num(r.get("net", 0))))
+                                net_ex_addons=_num(r.get("net", 0)),
+                                addon_s3123_qs=0.0, addon_equity_usd=0.0))
         except Exception as e:
             print(f"    ! S2126 grid skipped: {e}")
     df = pd.DataFrame(out)
