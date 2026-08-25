@@ -18,8 +18,6 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
     out = Path(outdir)
     out.mkdir(parents=True, exist_ok=True)
 
-    per_layer.drop(columns=[c for c in per_layer.columns if c.startswith("wb_")],
-                   errors="ignore").to_csv(out / "per_layer.csv", index=False)
     sw.to_csv(out / "space_weather_by_manufacturer.csv", index=False)
     mr.to_csv(out / "max_risk_by_layer.csv", index=False)
     netting.to_csv(out / "netting_waterfalls.csv", index=False)
@@ -72,6 +70,12 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
     # additive scenarios already are).
     from . import netting as _net_mod
     per_layer = per_layer.join(_net_mod.selection_contribs(per_layer, params))
+
+    # Written HERE, not earlier: the syndicate and selection-scenario columns
+    # joined just above must be in the CSV, or downstream consumers see no
+    # Space Weather / Max Risk / S3123 / S2126 per-layer detail.
+    per_layer.drop(columns=[c for c in per_layer.columns if c.startswith("wb_")],
+                   errors="ignore").to_csv(out / "per_layer.csv", index=False)
 
     def _pl_sum_refs(wbk, prefix):
         """{scenario: {'g': =SUM(range), 'n': =SUM(range)}} over Per Layer.
