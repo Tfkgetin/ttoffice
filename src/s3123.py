@@ -47,6 +47,13 @@ import pandas as pd
 SCEN_ORDER = ["Proton Flare", "Space Weather", "Generic Defect",
               "Space Debris", "Max Risk"]
 
+# Space Debris altitude-band labels. The named bands come from the config
+# (s3123_rds.scenarios.space_debris.altitude_groups); these three cover the
+# layers no band claims, and are the strings the Per Layer tab shows.
+ALT_ALL_LEO = "LEO (all — no altitude)"   # matches the scenario detail on fallback
+ALT_OUTSIDE = "LEO (outside bands)"
+ALT_NO_ALT = "LEO (no altitude)"
+
 # FIX(recon 2026Q1, D5): mirror of engine.CONSORTIUM_START — kept local so this
 # module stays importable standalone; config s3123_rds.consortium_start wins.
 CONSORTIUM_START = date(2024, 7, 1)
@@ -227,6 +234,71 @@ def _generic_defect(df, share, cfg):
     return top.sum(), _net(top, df, cfg), f"Top {s.get('top_n', 10)} risks", top
 
 
+def _alt_band(df: pd.DataFrame, cfg: dict) -> pd.Series:
+    """Per-layer Space Debris altitude band. Empty string for anything the
+    scenario does not look at (non-LEO, off-risk).
+
+    Every bound is read from cfg["sd"]["altitude_groups"] — no altitude is
+    written here, so changing the config changes the bands and nothing else.
+    """
+    s = cfg["sd"]
+    groups = s.get("altitude_groups") or []
+    leo = df["orbit"].isin(s["orbits"]) & (df["on_risk_flag"] == 1)
+    out = pd.Series("", index=df.index, dtype=object)
+    if not groups or "altitude_km" not in df.columns:
+        out[leo] = ALT_ALL_LEO
+        return out
+    alt = pd.to_numeric(df["altitude_km"], errors="coerce")
+    out[leo] = ALT_OUTSIDE
+    out[leo & alt.isna()] = ALT_NO_ALT
+    for grp in groups:
+        out[leo & alt.ge(grp["low"]) & alt.lt(grp["high"])] = grp["name"]
+    if not out.isin([g["name"] for g in groups]).any():
+        out[leo] = ALT_ALL_LEO      # no band claimed anything -> scenario falls back
+    return out
+
+
+def altitude_group(df: pd.DataFrame, p, cfg_key: str = "s3123_rds") -> pd.Series:
+    """Per-layer altitude band for the Per Layer tab (column lloyds_alt_group).
+
+    Returns exactly the labels _space_debris selects on, so a reader can see why
+    a layer is in or out of the Space Debris pick.
+    """
+    return _alt_band(df, _cfg(p, cfg_key))
+
+
+def sd_group_breakdown(df: pd.DataFrame, p, cfg_key: str = "s3123_rds",
+                       factor_col: str = "s3123_factor") -> pd.DataFrame:
+    """Space Debris totals per altitude band, so the MAX pick is checkable.
+
+    The scenario reports only the winning band; this shows the losing one (and
+    any LEO the bands do not claim) alongside it.
+    """
+    cfg = _cfg(p, cfg_key)
+    share = s3123_share(df, cfg, factor_col)
+    s = cfg["sd"]
+    line = (share * df["rpf"]) if s.get("apply_rpf", True) \
+        else (share * s.get("loss", 1.0))
+    band = _alt_band(df, cfg)
+    named = [g["name"] for g in (s.get("altitude_groups") or [])]
+    rows = []
+    for name in (named or [ALT_ALL_LEO]):
+        idx = df.index[band.eq(name)]
+        rows.append(dict(group=name, layers=len(idx), in_pick=True,
+                         gross=float(line[idx].sum()),
+                         net=_net(line[idx], df, cfg) if len(idx) else 0.0))
+    for name in (ALT_OUTSIDE, ALT_NO_ALT, ALT_ALL_LEO):
+        idx = df.index[band.eq(name)]
+        if len(idx) and name not in [r["group"] for r in rows]:
+            rows.append(dict(group=name, layers=len(idx), in_pick=False,
+                             gross=float(line[idx].sum()), net=0.0))
+    pick = max((r for r in rows if r["in_pick"] and r["layers"]),
+               key=lambda x: x["gross"], default=None)
+    for r_ in rows:
+        r_["selected"] = r_ is pick
+    return pd.DataFrame(rows)
+
+
 def _space_debris(df, share, cfg):
     # JJ's filed basis (vw_SpaceRDS_Space_Debris_Lloyds): 100% of all LEO
     # satellites in the SAME orbit range (RPF-adjusted), taking the MAX across
@@ -239,20 +311,23 @@ def _space_debris(df, share, cfg):
     leo = df["orbit"].isin(s["orbits"]) & flag
     line = (share * df["rpf"]) if s.get("apply_rpf", True) \
         else (share * s.get("loss", 1.0))
-    groups = s.get("altitude_groups")
-    if groups and "altitude_km" in df.columns:
-        alt = pd.to_numeric(df["altitude_km"], errors="coerce")
-        best = None
-        for grp in groups:
-            m = leo & alt.ge(grp["low"]) & alt.lt(grp["high"])
-            tot = float(line[m].sum())
-            if best is None or tot > best[0]:
-                best = (tot, df.index[m], grp["name"])
-        if best is not None and len(best[1]):
-            idx = best[1]
-            return line[idx].sum(), _net(line[idx], df, cfg), f"LEO {best[2]}", line[idx]
-    # fallback: all LEO (no altitude / no groups configured)
-    return line[leo].sum(), _net(line[leo], df, cfg), "LEO (all — no altitude)", line[leo]
+    # Band each layer once, then pick the worst band. Sharing _alt_band with the
+    # Per Layer column is deliberate: the tab explains this selection rather
+    # than restating it, so the two can never drift.
+    band = _alt_band(df, cfg)
+    best = None
+    for grp in (s.get("altitude_groups") or []):
+        idx = df.index[band.eq(grp["name"])]
+        if not len(idx):
+            continue
+        tot = float(line[idx].sum())
+        if best is None or tot > best[0]:
+            best = (tot, idx, grp["name"])
+    if best is not None:
+        idx = best[1]
+        return line[idx].sum(), _net(line[idx], df, cfg), f"LEO {best[2]}", line[idx]
+    # fallback: all LEO (no altitude / no groups configured / nothing in band)
+    return line[leo].sum(), _net(line[leo], df, cfg), ALT_ALL_LEO, line[leo]
 
 
 def _max_risk(df, share, cfg):

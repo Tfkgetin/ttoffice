@@ -338,6 +338,12 @@ _PL_KEEP = ["program_id", "layer_id", "entity", "mv_class", "mapping_code",
             # and S3123 & Equity tab are live SUM / SUMPRODUCT over Per Layer.
             "sw_fihl", "sw_ful", "sw_fiid", "mr_fihl", "mr_ful", "mr_fiid",
             "ext_qs_pp", "igr_ceded_pp", "s3123_qs_pp", "equity_pp",
+            # Space Debris altitude banding: the raw Seradata altitude and the
+            # band it puts the layer in ("Group 1"/"Group 2", or the LEO the
+            # bands do not claim). Bounds live in the config, not here — this is
+            # the same label s3123._space_debris selects on, so the tab explains
+            # the pick instead of restating it.
+            "altitude_km", "lloyds_alt_group",
             # per-layer S3123 / S2126 syndicate contributions per RDS. The _g
             # (gross) and _n (net) cells are LIVE formulas built from per_sc x
             # factor x _elig x loss x rpf and the QS cession; _elig (share gate)

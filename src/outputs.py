@@ -71,6 +71,11 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
     from . import netting as _net_mod
     per_layer = per_layer.join(_net_mod.selection_contribs(per_layer, params))
 
+    # Space Debris altitude band per layer, for the Per Layer tab. Both
+    # syndicates share one scenario block in config, so one column serves both.
+    if (params.raw.get("s3123_rds") or {}).get("enabled"):
+        per_layer["lloyds_alt_group"] = _s3c.altitude_group(per_layer, params)
+
     # Written HERE, not earlier: the syndicate and selection-scenario columns
     # joined just above must be in the CSV, or downstream consumers see no
     # Space Weather / Max Risk / S3123 / S2126 per-layer detail.
@@ -198,7 +203,8 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
         _fp = str(out / f"Space_RDS_results_{params.as_at}.xlsx")
         _wb = _opx.load_workbook(_fp)
         s3123_sheet.write_s3123_sheet(
-            _wb, s3grid, rec, as_at=str(params.as_at), qoq=s3_qoq)
+            _wb, s3grid, rec, as_at=str(params.as_at), qoq=s3_qoq,
+            alt_groups=_s3c.sd_group_breakdown(per_layer, params))
         _wb.save(_fp)
 
     # Lloyd's RDS Summary (JJ's filed deliverable) — the workbook's LAST tab.
@@ -248,6 +254,9 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
         _wb2 = _opx3.load_workbook(_fp2)
         s3123_sheet.write_s3123_sheet(
             _wb2, s2grid, as_at=str(params.as_at),
+            alt_groups=_s3c.sd_group_breakdown(per_layer, params,
+                                               cfg_key="s2126_rds",
+                                               factor_col="s2126_factor"),
             sheet_name="S2126 RDS",
             title="S2126 RDS — Syndicate 2126 (Lloyd's)",
             subtitle=(f"New consortium participant from 2026-04-01 (5/30 share) · "
