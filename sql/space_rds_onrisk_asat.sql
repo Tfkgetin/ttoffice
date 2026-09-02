@@ -48,7 +48,7 @@ OriginalBaseDataConsortiumLayersAdjusted AS (
         Signed_Premium_USD*cs_ig.Cession as [Layer_Signed_Premium_USD],
         P.Inception, Coverage, P.Expiry, [Launch Date], [Orbit Category],
         MonthsOnRisk, IPO.SpacecraftId, [Spacecraft Name], [Bus Manufacturer], [Prime Manufacturer],
-        P.Placing_Basis,
+        P.Placing_Basis, b.Controlling_Body AS Controlling_Body,
         CAST(CASE WHEN Coverage <> 'In-Orbit' THEN [Launch Date] ELSE P.Inception END AS DATE) AS On_Risk_Date,
         CAST(CASE WHEN Coverage <> 'In-Orbit' THEN DATEADD(MONTH, [MonthsOnRisk], IPO.[Launch Date]) ELSE P.Expiry END AS DATE) AS Off_Risk_Date,
         NULL AS [Action], Null as Altitude_km, Null as Line_size_perc
@@ -77,7 +77,7 @@ OriginalBaseDataIGLayersAdjusted AS (
         (isnull(Signed_Premium_USD,0)) as [Layer_Signed_Premium_USD],
         P.Inception, Coverage, P.Expiry, [Launch Date], [Orbit Category],
         MonthsOnRisk, IPO.SpacecraftId, [Spacecraft Name], [Bus Manufacturer], [Prime Manufacturer],
-        P.Placing_Basis,
+        P.Placing_Basis, b.Controlling_Body AS Controlling_Body,
         CAST(CASE WHEN Coverage <> 'In-Orbit' THEN [Launch Date] ELSE P.Inception END AS DATE) AS On_Risk_Date,
         CAST(CASE WHEN Coverage <> 'In-Orbit' THEN DATEADD(MONTH, [MonthsOnRisk], IPO.[Launch Date]) ELSE P.Expiry END AS DATE) AS Off_Risk_Date,
         NULL AS [Action], Null as Altitude_km, Null as Line_size_perc
@@ -106,6 +106,7 @@ ManualOverrides AS (
         Inception, Coverage, Expiry, [Launch Date], [Orbit Category],
         MonthsOnRisk, SpacecraftId, [Spacecraft Name], [Bus Manufacturer], [Prime Manufacturer],
         CAST(NULL AS NVARCHAR(100)) AS Placing_Basis,
+        CAST(CASE WHEN l.IGOnly = 1 THEN 'IG' WHEN l.Consortium = 1 THEN 'Consortium' ELSE NULL END AS NVARCHAR(50)) AS Controlling_Body,
         On_Risk_Date, Off_Risk_Date, [Action], Altitude_km, Line_size_perc
     FROM [SpaceTrax_Data].[rds].[manually_controlled_rds_layers] l
     inner join [SpaceTrax_Data].[rds].param_consortium_splits cs
@@ -168,7 +169,7 @@ SELECT
     Coverage, [Layer_Signed_Exposure_USD], [Layer_Signed_Premium_USD], [Launch Date],
     [Bus Type], [Bus Family], [Vehicle Family], [Orbit Category], MonthsOnRisk,
     SpacecraftId, [Spacecraft Name], [Bus Manufacturer], [Prime Manufacturer],
-    Placing_Basis,
+    Placing_Basis, Controlling_Body,
     On_Risk_Date, Off_Risk_Date, [Action], QS_IGR, XOL_Deductible_USD, XOL_Limit_USD,
     MonthsLeftOnRisk, [External QS], [Net of External QS], [QS FIBL Ceded],
     [Net of QS IGR], [XoL FIBL Ceded],

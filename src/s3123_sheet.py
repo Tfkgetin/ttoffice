@@ -41,7 +41,7 @@ def _quality_flags(grid):
 
 def write_s3123_sheet(wb, grid, recon=None, notes=None, as_at="2026-04-01", qoq=None,
                       sheet_name="S3123 RDS", title="S3123 RDS — Syndicate 3123 (Lloyd's)",
-                      subtitle=None):
+                      subtitle=None, alt_groups=None):
     if sheet_name in wb.sheetnames:
         del wb[sheet_name]
     ws=wb.create_sheet(sheet_name)
@@ -84,6 +84,33 @@ def write_s3123_sheet(wb, grid, recon=None, notes=None, as_at="2026-04-01", qoq=
         for c in range(2,6): ws.cell(r,c).border=Border(bottom=thin)
         r+=1
     r+=1
+    # ---- Space Debris altitude bands: the losing band, shown ----
+    # The scenario reports only the band it picked, so a wrong pick (or the
+    # all-LEO fallback) is invisible on the grid above. This makes the MAX
+    # checkable and shows any LEO the bands do not claim.
+    if alt_groups is not None and len(alt_groups):
+        ws.cell(r,2,"SPACE DEBRIS — ALTITUDE BANDS").font=_f(11,True,NAVY); r+=1
+        ws.cell(r,2,"Worst band is taken; the rest are shown so the pick can be "
+                    "checked. Bounds come from config (altitude_groups).").font=_f(9,False,SOFT)
+        ws.merge_cells(start_row=r,start_column=2,end_row=r,end_column=8); r+=1
+        for c,h in zip(range(2,7),["BAND","LAYERS","GROSS","NET","PICK"]):
+            ws.cell(r,c,h).font=_f(9,True,WHITE); ws.cell(r,c).fill=_fill(SOFT)
+            ws.cell(r,c).alignment=Alignment(horizontal="left" if c in (2,6) else "right")
+        r+=1
+        for _,g in alt_groups.iterrows():
+            sel=bool(g.get("selected")); banded=bool(g.get("in_pick"))
+            ws.cell(r,2,str(g["group"])).font=_f(10,sel,INK if banded else SOFT)
+            lc=ws.cell(r,3,int(g["layers"])); lc.font=_f(10,False,INK)
+            lc.alignment=Alignment(horizontal="right")
+            for c,key in [(4,"gross"),(5,"net")]:
+                v=_money(g[key]) if (banded or key=="gross") else ""
+                cell=ws.cell(r,c,v); cell.font=_f(10,sel,INK if banded else SOFT)
+                cell.alignment=Alignment(horizontal="right")
+            note="◄ selected" if sel else ("" if banded else "not banded — excluded")
+            ws.cell(r,6,note).font=_f(9,sel,NAVY if sel else SOFT)
+            for c in range(2,7): ws.cell(r,c).border=Border(bottom=thin)
+            r+=1
+        r+=1
     # ---- reconciliation vs manual ----
     if recon is not None and len(recon):
         ws.cell(r,2,"RECONCILIATION vs MANUAL (JJ, 2026Q1)").font=_f(11,True,NAVY); r+=1

@@ -18,8 +18,6 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
     out = Path(outdir)
     out.mkdir(parents=True, exist_ok=True)
 
-    per_layer.drop(columns=[c for c in per_layer.columns if c.startswith("wb_")],
-                   errors="ignore").to_csv(out / "per_layer.csv", index=False)
     sw.to_csv(out / "space_weather_by_manufacturer.csv", index=False)
     mr.to_csv(out / "max_risk_by_layer.csv", index=False)
     netting.to_csv(out / "netting_waterfalls.csv", index=False)
@@ -72,6 +70,17 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
     # additive scenarios already are).
     from . import netting as _net_mod
     per_layer = per_layer.join(_net_mod.selection_contribs(per_layer, params))
+
+    # Space Debris altitude band per layer, for the Per Layer tab. Both
+    # syndicates share one scenario block in config, so one column serves both.
+    if (params.raw.get("s3123_rds") or {}).get("enabled"):
+        per_layer["lloyds_alt_group"] = _s3c.altitude_group(per_layer, params)
+
+    # Written HERE, not earlier: the syndicate and selection-scenario columns
+    # joined just above must be in the CSV, or downstream consumers see no
+    # Space Weather / Max Risk / S3123 / S2126 per-layer detail.
+    per_layer.drop(columns=[c for c in per_layer.columns if c.startswith("wb_")],
+                   errors="ignore").to_csv(out / "per_layer.csv", index=False)
 
     def _pl_sum_refs(wbk, prefix):
         """{scenario: {'g': =SUM(range), 'n': =SUM(range)}} over Per Layer.
@@ -194,7 +203,8 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
         _fp = str(out / f"Space_RDS_results_{params.as_at}.xlsx")
         _wb = _opx.load_workbook(_fp)
         s3123_sheet.write_s3123_sheet(
-            _wb, s3grid, rec, as_at=str(params.as_at), qoq=s3_qoq)
+            _wb, s3grid, rec, as_at=str(params.as_at), qoq=s3_qoq,
+            alt_groups=_s3c.sd_group_breakdown(per_layer, params))
         _wb.save(_fp)
 
     # Lloyd's RDS Summary (JJ's filed deliverable) — the workbook's LAST tab.
@@ -221,7 +231,8 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
             risk_appetite=appetite, prior=s3_prior,
             qoq_note=lcfg.get("qoq_note"), params=params,
             change_narrative=lcfg.get("change_narrative"),
-            pl_refs=_pl_sum_refs(_wbl, "s3123"))
+            pl_refs=_pl_sum_refs(_wbl, "s3123"),
+            view_as_at=(views or {}).get("view_as_at"))
         # The computed 'S3123 RDS' tab is superseded by the Lloyd's Summary —
         # keep it in the file (audit) but hide it from view.
         if "S3123 RDS" in _wbl.sheetnames:
@@ -244,6 +255,9 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
         _wb2 = _opx3.load_workbook(_fp2)
         s3123_sheet.write_s3123_sheet(
             _wb2, s2grid, as_at=str(params.as_at),
+            alt_groups=_s3c.sd_group_breakdown(per_layer, params,
+                                               cfg_key="s2126_rds",
+                                               factor_col="s2126_factor"),
             sheet_name="S2126 RDS",
             title="S2126 RDS — Syndicate 2126 (Lloyd's)",
             subtitle=(f"New consortium participant from 2026-04-01 (5/30 share) · "
@@ -266,7 +280,8 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
                 change_narrative=l2.get("change_narrative"),
                 sheet_name="S2126 RDS Summary", syndicate_no="2126",
                 cfg_key="s2126_rds", factors=params.s2126_factors,
-                pl_refs=_pl_sum_refs(_wb3, "s2126"))
+                pl_refs=_pl_sum_refs(_wb3, "s2126"),
+                view_as_at=(views2 or {}).get("view_as_at"))
             # raw computed 'S2126 RDS' tab superseded by the summary — hide it
             if "S2126 RDS" in _wb3.sheetnames:
                 _wb3["S2126 RDS"].sheet_state = "hidden"

@@ -393,6 +393,7 @@ s3123_rds:
   enabled: true
   share: consortium_factor                       # per_sc * s3123_factor, consortium-gated
   consortium_start: "2024-07-01"                 # hard floor on share eligibility (D5 fix)
+  lloyds_exclude_entities: ["FIBL"]              # Lloyd's population = operating cos (FUL+FIID); FIBL is the internal RI receiver, no syndicate share (ties JJ; excludes ALSAT 3A/3B)
   qs_to_ig: 0.20                                 # 20% QS back to IG -> net = gross * 0.80
   qs_to_ig_excluded: [14294, 13257, 10590]       # above IG max line -> retain 100%
   # FIX(recon 2026Q1, O2): the old code ignored `active` and applied attach=0,
