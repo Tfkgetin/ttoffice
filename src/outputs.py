@@ -231,7 +231,8 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
             risk_appetite=appetite, prior=s3_prior,
             qoq_note=lcfg.get("qoq_note"), params=params,
             change_narrative=lcfg.get("change_narrative"),
-            pl_refs=_pl_sum_refs(_wbl, "s3123"))
+            pl_refs=_pl_sum_refs(_wbl, "s3123"),
+            view_as_at=(views or {}).get("view_as_at"))
         # The computed 'S3123 RDS' tab is superseded by the Lloyd's Summary —
         # keep it in the file (audit) but hide it from view.
         if "S3123 RDS" in _wbl.sheetnames:
@@ -279,7 +280,8 @@ def export(outdir: str, per_layer: pd.DataFrame, sw: pd.DataFrame,
                 change_narrative=l2.get("change_narrative"),
                 sheet_name="S2126 RDS Summary", syndicate_no="2126",
                 cfg_key="s2126_rds", factors=params.s2126_factors,
-                pl_refs=_pl_sum_refs(_wb3, "s2126"))
+                pl_refs=_pl_sum_refs(_wb3, "s2126"),
+                view_as_at=(views2 or {}).get("view_as_at"))
             # raw computed 'S2126 RDS' tab superseded by the summary — hide it
             if "S2126 RDS" in _wb3.sheetnames:
                 _wb3["S2126 RDS"].sheet_state = "hidden"

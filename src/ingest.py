@@ -868,11 +868,34 @@ def load_lloyds_rds_summary(params):
             print(f"      Lloyd's RDS summary: view {view} unreadable ({e})")
             return None
 
+    # The pipeline injects its own as-at (sql/space_rds_onrisk_asat.sql) and never
+    # touches the shared rds.param_as_at_date. JJ's Lloyd's views DO read that
+    # table, so they answer at whatever quarter it happens to hold — which can be
+    # a different one from this run. Read it so the sheet can say so rather than
+    # presenting a stale block as current. Advisory only: never raises, and a
+    # table that cannot be read simply yields None (no claim either way).
+    view_as_at = None
+    try:
+        with _w.catch_warnings():
+            _w.simplefilter("ignore")
+            _d = pd.read_sql("SELECT TOP 1 * FROM rds.param_as_at_date", cn)
+        if len(_d) and len(_d.columns):
+            view_as_at = pd.to_datetime(_d.iloc[0, 0], errors="coerce")
+            view_as_at = None if pd.isna(view_as_at) else view_as_at.date()
+    except Exception as e:  # noqa: BLE001
+        print(f"      Lloyd's RDS summary: param_as_at_date unreadable ({e})")
+
     out = {"rds": _read(cfg.get("rds_view")),
-           "space_weather": _read(cfg.get("space_weather_view"))}
+           "space_weather": _read(cfg.get("space_weather_view")),
+           "view_as_at": view_as_at}
     n1 = 0 if out["rds"] is None else len(out["rds"])
     n2 = 0 if out["space_weather"] is None else len(out["space_weather"])
     print(f"      Lloyd's RDS summary: {n1} RDS row(s), {n2} bus-type row(s) read")
+    run_as_at = getattr(params, "as_at", None)
+    if view_as_at is not None and run_as_at is not None and view_as_at != run_as_at:
+        print(f"      ⚠  Lloyd's views are dated {view_as_at} (rds.param_as_at_date) "
+              f"but this run is as-at {run_as_at} — the bus-type block is from a "
+              f"DIFFERENT quarter. Flagged on the sheet.")
     if not n1 and not n2:
         return None
     return out

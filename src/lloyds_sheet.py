@@ -106,7 +106,8 @@ def write_lloyds_rds_summary(wb, grid, as_at="", sw_view=None,
                              risk_appetite=None, prior=None, qoq_note=None,
                              params=None, change_narrative=None,
                              sheet_name="Lloyds RDS Summary", syndicate_no="3123",
-                             cfg_key="s3123_rds", factors=None, pl_refs=None):
+                             cfg_key="s3123_rds", factors=None, pl_refs=None,
+                             view_as_at=None):
     """Render the Lloyd's (S3123) RDS summary tab from the pipeline's COMPUTED
     grid (gross + net) — it does not depend on the Lloyd's SQL views, which are
     currently unreadable (a varchar->int CAST in the view dies on 'BJ-3C 01').
@@ -120,6 +121,11 @@ def write_lloyds_rds_summary(wb, grid, as_at="", sw_view=None,
                       live Per-Layer SUM formulas for Gross/Net; when present
                       the syndicate Gross/Net render as formulas, not baked
                       engine numbers (Δ columns stay live too).
+      view_as_at    : optional date the Lloyd's SQL views answer at
+                      (rds.param_as_at_date). The headline grid is computed
+                      in-engine at the RUN's as-at, but sw_view is read from the
+                      view verbatim — so when the two dates differ the bus-type
+                      block belongs to another quarter and is banner-flagged.
     """
     if sheet_name in wb.sheetnames:
         del wb[sheet_name]
@@ -286,6 +292,19 @@ def write_lloyds_rds_summary(wb, grid, as_at="", sw_view=None,
     ws.cell(r, 2, "Top-4 gross exposures on the largest bus-type group drive the "
             "Design Deficiency RDS above.").font = _f(9, False, SOFT)
     r += 1
+    # STALE-VIEW GUARD: the headline grid above is computed in-engine at the run's
+    # as-at, but this block is read from vw_SpaceRDS_SpaceWeather_Lloyds verbatim,
+    # and that view dates itself from the shared rds.param_as_at_date — which the
+    # pipeline deliberately does not set. When the two disagree the block is a
+    # different quarter's data sitting under this quarter's heading; say so.
+    if (sw is not None and len(sw) and view_as_at is not None
+            and str(view_as_at) != str(as_at)):
+        r = _banner(ws, r, f"Bus-type detail below is as at {view_as_at}, NOT "
+                    f"{as_at}. It is read from vw_SpaceRDS_SpaceWeather_Lloyds, "
+                    f"which dates itself from rds.param_as_at_date; the pipeline "
+                    f"injects its own as-at and does not set that table. The RDS "
+                    f"figures above ARE at {as_at} (computed in-engine). To align "
+                    f"the block, set rds.param_as_at_date to {as_at} and re-run.")
     if sw is None or not len(sw):
         r = _banner(ws, r, "Bus-type detail unavailable: vw_SpaceRDS_SpaceWeather_"
                     "Lloyds currently errors in SQL (varchar→int CAST fails on "
