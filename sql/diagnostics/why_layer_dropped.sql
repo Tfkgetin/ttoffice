@@ -22,6 +22,54 @@ CREATE TABLE #Layers (LayerId INT PRIMARY KEY);
 INSERT INTO #Layers (LayerId) VALUES
     (475187), (375916), (375920), (359480), (359481), (341461), (340163);
 
+-- ===========================================================================
+-- QUICK CHECK — start here. One flat query, no CTEs. Returns the FIRST gate
+-- each layer fails, in the order the extract applies them. Covers 10 of the 12;
+-- it uses Expiry as a stand-in for the derived off-risk date, which is exact
+-- for in-orbit cover (most of the book) but not for launch cover — if this
+-- returns "PASSES", run Q0 and Q4 below, which do the date derivation properly.
+-- ===========================================================================
+SELECT  P.ProgramId, P.LayerId, b.Controlling_Body, P.Mapping_Code,
+        P.Program_Type, P.Placing_Basis, P.IsBound,
+        P.Inception AS ldv_inception, l.Inception AS layers_t_inception, P.Expiry,
+        CASE
+          WHEN l.LayerID IS NULL                            THEN '1  no Layers_t row'
+          WHEN b.Controlling_Body IS NULL                   THEN '2  controlling body is NULL'
+          WHEN b.Controlling_Body NOT IN ('Consortium','IG','MGU')
+                                                            THEN '2  controlling body = ' + b.Controlling_Body
+          WHEN NOT EXISTS (SELECT 1 FROM SpaceTrax_Data.rds.param_mapping_code M
+                           WHERE M.Mapping_Code = P.Mapping_Code)
+                                                            THEN '3  not in param_mapping_code'
+          WHEN NOT EXISTS (SELECT 1 FROM SpaceTrax_Data.rds.param_consortium_splits S
+                           WHERE S.[Controlling Body] = 'MGU'
+                             AND S.[Start Date] <= l.Inception
+                             AND S.[End Date]   >= l.Inception)
+                                                            THEN '4  NO MGU split covers Layers_t.Inception'
+          WHEN P.IsBound <> 1                               THEN '5  IsBound <> 1'
+          WHEN P.Expiry < @AsAt                             THEN '6  expiry before as-at'
+          WHEN P.Inception > @AsAt                          THEN '7  inception after as-at'
+          WHEN P.Mapping_Code IS NULL                       THEN '8  Mapping_Code is NULL'
+          WHEN P.Mapping_Code NOT IN ('ASO','ASC')          THEN '8  Mapping_Code = ' + P.Mapping_Code
+          WHEN P.Program_Type IS NULL                       THEN '9  Program_Type is NULL'
+          WHEN P.Program_Type IN ('LVFO','Satellite Launch') THEN '9  Program_Type = ' + P.Program_Type
+          WHEN P.Placing_Basis IS NULL                      THEN '10 Placing_Basis is NULL'
+          WHEN P.Placing_Basis = 'Consortium Declaration'   THEN '10 Consortium Declaration'
+          WHEN EXISTS (SELECT 1 FROM SpaceTrax_Data.rds.manually_controlled_rds_layers MC
+                       WHERE MC.LayerID = P.LayerId)        THEN '11 in manually_controlled_rds_layers'
+          ELSE 'PASSES — extract should keep it; check Excluded tab, then Q0/Q4'
+        END AS dropped_by
+FROM        [Prequel_Reporting].[Prequel].[Layer_Details_v] P
+INNER JOIN  #Layers T                              ON T.LayerId = P.LayerId
+LEFT JOIN   Prequel.Data.Layers_t l                ON l.LayerID = P.LayerID
+LEFT JOIN   Prequel.Lookups.Controlling_Bodies_t b ON b.Controlling_BodyID = l.Controlling_BodyID
+ORDER BY P.ProgramId, P.LayerId;
+
+
+-- ===========================================================================
+-- Everything below is the long form — run it only if the quick check says
+-- PASSES, or you want to see every failing gate rather than the first.
+-- ===========================================================================
+
 -- ---------------------------------------------------------------------------
 -- Q0 — MASTER VERDICT. One row per layer; `verdict` lists every gate it fails.
 --      An empty verdict means the extract SHOULD have kept it, in which case
